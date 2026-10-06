@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.env
+*.db
+data/
+backups/
+node_modules/
+frontend/dist/
+*.egg-info/
+
+*.sqlite
+.env.*
+!.env.example
+frontend/test-results/
+frontend/playwright-report/
