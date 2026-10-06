@@ -42,6 +42,7 @@ type College = {
   rooms: Record<string, Item>;
   subjects: Record<string, Item>;
   requirements: Record<string, Item>;
+  allocations: Record<string, Item>;
   lessons: Record<string, Item>;
   plans: Record<string, Item>;
 };
@@ -1576,113 +1577,143 @@ function Load({
   save,
   editor,
 }: Common & { week: string; setWeek: (v: string) => void }) {
-  const [item, setItem] = useState<Item | null>(null);
+  const [item, setItem] = useState<Item | null>(null),
+    [periods, setPeriods] = useState(false);
   const items = Object.values(state.requirements).filter(
     (r) => r.week === week,
   );
   return (
     <div className="panel">
-      <div className="toolbar">
-        <WeekControl
-          week={week}
-          onChange={setWeek}
-          endDay={Math.max(...state.settings.study_days)}
-        />
-        <Button
-          className="primary"
-          onClick={() => {
-            setItem({});
-            editor(true);
-          }}
+      <div className="tabs">
+        <button
+          className={!periods ? "active" : ""}
+          onClick={() => setPeriods(false)}
         >
-          <Plus size={16} />
-          Нагрузка
-        </Button>
+          Недельный план
+        </button>
+        <button
+          className={periods ? "active" : ""}
+          onClick={() => setPeriods(true)}
+        >
+          Семестровая нагрузка · {Object.keys(state.allocations ?? {}).length}
+        </button>
       </div>
-      <div className="panel-note">
-        Часы задаются в академических часах. Общее занятие потока оформляется
-        одной строкой, практика разных групп отдельными строками.
-      </div>
-      {!items.length ? (
-        <div className="empty">
-          <Layers3 size={36} />
-          <h3>На эту неделю нет нагрузки</h3>
-          <p>Загрузите КУГ или добавьте подтверждённые часы вручную.</p>
-        </div>
-      ) : (
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Дисциплина / группы</th>
-              <th>Вид</th>
-              <th>Преподаватели</th>
-              <th>Часы</th>
-              <th>Блок</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((r) => (
-              <tr key={r.id}>
-                <td>
-                  <b>{state.subjects[r.subject_id]?.name}</b>
-                  <small>{names(state.groups, r.group_ids)}</small>
-                </td>
-                <td>
-                  <span className={`badge ${r.kind}`}>{labels[r.kind]}</span>
-                </td>
-                <td>{names(state.teachers, r.teacher_ids)}</td>
-                <td>{r.hours}</td>
-                <td>{r.block_hours} ч.</td>
-                <td className="table-actions">
-                  <button
-                    className="icon-button"
-                    onClick={() => {
-                      setItem(r);
-                      editor(true);
-                    }}
-                    aria-label="Редактировать нагрузку"
-                  >
-                    <Pencil size={16} />
-                  </button>
-                  <button
-                    className="icon-button"
-                    aria-label="Удалить нагрузку"
-                    onClick={async () => {
-                      if (
-                        window.confirm(
-                          "Удалить нагрузку? Сначала нужно удалить связанные занятия.",
-                        )
-                      )
-                        try {
-                          await save(
-                            `/requirements/${r.id}?version=${version}`,
-                            undefined,
-                            "DELETE",
-                          );
-                        } catch {}
-                    }}
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-      {item && (
-        <RequirementEditor
+      {periods ? (
+        <PeriodLoad
           state={state}
           version={version}
-          item={item}
-          week={week}
           save={save}
-          onClose={() => {
-            setItem(null);
-            editor(false);
-          }}
+          editor={editor}
+          week={week}
         />
+      ) : (
+        <>
+          <div className="toolbar">
+            <WeekControl
+              week={week}
+              onChange={setWeek}
+              endDay={Math.max(...state.settings.study_days)}
+            />
+            <Button
+              className="primary"
+              onClick={() => {
+                setItem({});
+                editor(true);
+              }}
+            >
+              <Plus size={16} />
+              Нагрузка
+            </Button>
+          </div>
+          <div className="panel-note">
+            Часы задаются в академических часах. Общее занятие потока
+            оформляется одной строкой, практика разных групп отдельными
+            строками.
+          </div>
+          {!items.length ? (
+            <div className="empty">
+              <Layers3 size={36} />
+              <h3>На эту неделю нет нагрузки</h3>
+              <p>Загрузите КУГ или добавьте подтверждённые часы вручную.</p>
+            </div>
+          ) : (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Дисциплина / группы</th>
+                  <th>Вид</th>
+                  <th>Преподаватели</th>
+                  <th>Часы</th>
+                  <th>Блок</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((r) => (
+                  <tr key={r.id}>
+                    <td>
+                      <b>{state.subjects[r.subject_id]?.name}</b>
+                      <small>{names(state.groups, r.group_ids)}</small>
+                    </td>
+                    <td>
+                      <span className={`badge ${r.kind}`}>
+                        {labels[r.kind]}
+                      </span>
+                    </td>
+                    <td>{names(state.teachers, r.teacher_ids)}</td>
+                    <td>{r.hours}</td>
+                    <td>{r.block_hours} ч.</td>
+                    <td className="table-actions">
+                      <button
+                        className="icon-button"
+                        onClick={() => {
+                          setItem(r);
+                          editor(true);
+                        }}
+                        aria-label="Редактировать нагрузку"
+                      >
+                        <Pencil size={16} />
+                      </button>
+                      <button
+                        className="icon-button"
+                        aria-label="Удалить нагрузку"
+                        onClick={async () => {
+                          if (
+                            window.confirm(
+                              "Удалить нагрузку? Сначала нужно удалить связанные занятия.",
+                            )
+                          )
+                            try {
+                              await save(
+                                `/requirements/${r.id}?version=${version}`,
+                                undefined,
+                                "DELETE",
+                              );
+                            } catch {}
+                        }}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {item && (
+            <RequirementEditor
+              state={state}
+              version={version}
+              item={item}
+              week={week}
+              save={save}
+              onClose={() => {
+                setItem(null);
+                editor(false);
+              }}
+            />
+          )}
+        </>
       )}
     </div>
   );
@@ -1707,6 +1738,8 @@ function RequirementEditor({
       subject_id: "",
       group_ids: [],
       teacher_ids: [],
+      teacher_mode: "alternative",
+      allocation_id: null,
       room_ids: [],
       week,
       kind: "theory",
@@ -1737,6 +1770,44 @@ function RequirementEditor({
         }}
       >
         <div className="modal-body">
+          <Field
+            label="Семестровое назначение"
+            hint="Выбор переносит дисциплину, группы и преподавателей. Недельные часы задаются по КУГ."
+          >
+            <select
+              value={form.allocation_id ?? ""}
+              onChange={(e) => {
+                const a = state.allocations[e.target.value];
+                setForm((f) =>
+                  a
+                    ? {
+                        ...f,
+                        allocation_id: a.id,
+                        subject_id: a.subject_id,
+                        group_ids: a.group_ids,
+                        teacher_ids: a.teacher_ids,
+                        teacher_mode: a.teacher_mode,
+                        kind: a.kind,
+                      }
+                    : { ...f, allocation_id: null },
+                );
+              }}
+            >
+              <option value="">Без связи с семестровой нагрузкой</option>
+              {Object.values(state.allocations ?? {})
+                .filter(
+                  (a) =>
+                    a.start_date <= shift(form.week, 6) &&
+                    a.end_date >= form.week,
+                )
+                .map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {state.subjects[a.subject_id]?.name} · {labels[a.kind]} ·{" "}
+                    {names(state.groups, a.group_ids)}
+                  </option>
+                ))}
+            </select>
+          </Field>
           <Field label="Дисциплина">
             <Pick
               items={Object.values(state.subjects)}
@@ -1792,7 +1863,7 @@ function RequirementEditor({
           </Field>
           <Field
             label="Разрешённые преподаватели"
-            hint="Генератор выбирает одного из списка. Для совместного преподавания укажите участников при ручной правке."
+            hint="Укажите, выбирается один преподаватель или занятие ведут все вместе."
           >
             <Multi
               items={Object.values(state.teachers)}
@@ -1800,6 +1871,10 @@ function RequirementEditor({
               onChange={(v) => patch("teacher_ids", v)}
             />
           </Field>
+          <TeacherModeField
+            value={form.teacher_mode}
+            onChange={(v) => patch("teacher_mode", v)}
+          />
           <Field label="Разрешённые помещения">
             <Multi
               items={Object.values(state.rooms)}
@@ -1903,7 +1978,10 @@ function LessonEditor({
                         requirement_id: v,
                         subject_id: r.subject_id,
                         group_ids: r.group_ids,
-                        teacher_ids: [r.teacher_ids[0]],
+                        teacher_ids:
+                          r.teacher_mode === "together"
+                            ? r.teacher_ids
+                            : [r.teacher_ids[0]],
                         room_id: r.room_ids[0],
                         kind: r.kind,
                       }
@@ -2566,7 +2644,7 @@ function Imports({
     <>
       <div className="import-intro">
         <div>
-          <h2>Из Excel в рабочее расписание</h2>
+          <h2>Учебные планы и назначения</h2>
           <p>
             Сначала проверьте распознанные данные. Подтверждённые строки станут
             учебной нагрузкой.
@@ -2591,14 +2669,29 @@ function Imports({
           >
             Преподавательская нагрузка
           </button>
+          <button
+            className={kind === "term_load" ? "active" : ""}
+            onClick={() => setKind("term_load")}
+          >
+            Семестровая нагрузка Word
+          </button>
         </div>
         <label className="upload-zone">
           <FolderInput size={32} />
-          <b>{busy ? "Читаем документ…" : "Выберите файл Excel"}</b>
-          <span>XLSX, до 10 МБ · исходный документ сохраняется</span>
+          <b>
+            {busy
+              ? "Читаем документ…"
+              : kind === "term_load"
+                ? "Выберите документ Word"
+                : "Выберите файл Excel"}
+          </b>
+          <span>
+            {kind === "term_load" ? "DOCX" : "XLSX"}, до 10 МБ · исходный
+            документ сохраняется
+          </span>
           <input
             type="file"
-            accept=".xlsx"
+            accept={kind === "term_load" ? ".docx" : ".xlsx"}
             disabled={busy}
             onChange={async (e) => {
               const file = e.target.files?.[0];
@@ -2650,7 +2743,13 @@ function Imports({
                   <td>
                     <b>{d.filename}</b>
                   </td>
-                  <td>{d.kind === "kug" ? "КУГ" : "Нагрузка"}</td>
+                  <td>
+                    {d.kind === "kug"
+                      ? "КУГ"
+                      : d.kind === "term_load"
+                        ? "Семестр Word"
+                        : "Недельная нагрузка"}
+                  </td>
                   <td>{new Date(d.at).toLocaleDateString("ru")}</td>
                   <td>
                     <Button
@@ -2676,6 +2775,14 @@ function Imports({
             document={document}
             save={save}
             week={week}
+            onClose={close}
+          />
+        ) : document.preview.format === "term_load" ? (
+          <WordLoadImport
+            state={state}
+            version={version}
+            document={document}
+            save={save}
             onClose={close}
           />
         ) : (
@@ -2803,9 +2910,11 @@ function KugImport({
         </Field>
         <h3>Сопоставление занятий</h3>
         <p className="muted">
-          Укажите преподавателя и помещение для каждой строки. Теория выбранных
-          групп станет общим занятием; практика отдельной нагрузкой каждой
-          группы.
+          Выберите семестровые назначения и помещение. Часы каждого назначения
+          должны закрывать строку КУГ для каждой выбранной группы. Если строка
+          включает несколько разделов МДК, разделите недельные часы между ними.
+          При ручном назначении теория групп станет общим занятием, практика
+          отдельными занятиями.
         </p>
         {!rows.length && (
           <Notice>В этом столбце нет часов. Выберите другую неделю.</Notice>
@@ -2816,7 +2925,7 @@ function KugImport({
               <tr>
                 <th>Дисциплина / часы</th>
                 <th>Вид</th>
-                <th>Преподаватель</th>
+                <th>Семестровые назначения / преподаватель</th>
                 <th>Помещение</th>
                 <th>Блок, ч.</th>
               </tr>
@@ -2866,11 +2975,53 @@ function KugImport({
                       </select>
                     </td>
                     <td>
-                      <Pick
-                        items={Object.values(state.teachers)}
-                        value={m.teacher ?? ""}
-                        onChange={(v) => setRow(r.key, "teacher", v)}
-                      />
+                      {!!Object.keys(state.allocations ?? {}).length && (
+                        <>
+                          <Multi
+                            items={Object.values(state.allocations)
+                              .filter(
+                                (a) =>
+                                  a.kind === (m.kind ?? r.kind) &&
+                                  a.start_date <= shift(targetWeek, 6) &&
+                                  a.end_date >= targetWeek,
+                              )
+                              .map((a) => ({
+                                ...a,
+                                name: `${state.subjects[a.subject_id]?.name} · ${names(state.groups, a.group_ids)} · ${names(state.teachers, a.teacher_ids)}`,
+                              }))}
+                            value={m.allocation_ids ?? []}
+                            onChange={(v) => setRow(r.key, "allocation_ids", v)}
+                          />
+                          {(m.allocation_ids ?? []).map((id: string) => (
+                            <Field
+                              key={id}
+                              label={`Недельных часов: ${names(state.groups, state.allocations[id].group_ids)}`}
+                            >
+                              <input
+                                type="number"
+                                min={1}
+                                max={200}
+                                value={
+                                  m.allocation_hours?.[id] ?? r.hours[weekKey]
+                                }
+                                onChange={(e) =>
+                                  setRow(r.key, "allocation_hours", {
+                                    ...m.allocation_hours,
+                                    [id]: Number(e.target.value),
+                                  })
+                                }
+                              />
+                            </Field>
+                          ))}
+                        </>
+                      )}
+                      {!m.allocation_ids?.length && (
+                        <Pick
+                          items={Object.values(state.teachers)}
+                          value={m.teacher ?? ""}
+                          onChange={(v) => setRow(r.key, "teacher", v)}
+                        />
+                      )}
                     </td>
                     <td>
                       <Pick
@@ -2933,7 +3084,7 @@ function KugImport({
                 .filter((r: Item) => r.kind !== "self_study")
                 .map((r: Item) => {
                   const m = mapping[r.key] ?? {};
-                  if (!m.teacher || !m.room)
+                  if ((!m.teacher && !m.allocation_ids?.length) || !m.room)
                     throw new Error(
                       "Сопоставьте преподавателя и помещение каждой строки",
                     );
@@ -2942,6 +3093,10 @@ function KugImport({
                     subject_id: m.subject_id || null,
                     kind: m.kind ?? r.kind,
                     teacher_ids: [m.teacher],
+                    allocations: (m.allocation_ids ?? []).map((id: string) => ({
+                      allocation_id: id,
+                      hours: m.allocation_hours?.[id] ?? r.hours[weekKey],
+                    })),
                     room_ids: [m.room],
                     block_hours: m.block_hours ?? 2,
                   };
@@ -3085,6 +3240,856 @@ function LoadImport({
           }}
         >
           Импортировать {p.rows.length} строк
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
+function TeacherModeField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <Field label="Участие преподавателей">
+      <select
+        value={value ?? "alternative"}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="alternative">Выбрать одного из списка</option>
+        <option value="together">Все вместе на каждом занятии</option>
+      </select>
+    </Field>
+  );
+}
+
+function PeriodLoad({
+  state,
+  version,
+  save,
+  editor,
+  week,
+}: Common & { week: string }) {
+  const [item, setItem] = useState<Item | null>(null);
+  return (
+    <>
+      <div className="toolbar">
+        <p>
+          Подтверждённые часы на семестр. В недельный план они попадают по КУГ.
+        </p>
+        <Button
+          className="primary"
+          onClick={() => {
+            setItem({});
+            editor(true);
+          }}
+        >
+          <Plus size={16} />
+          Назначение на семестр
+        </Button>
+      </div>
+      <div className="grid-scroll">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Дисциплина / группы</th>
+              <th>Вид и преподаватели</th>
+              <th>Период</th>
+              <th>Семестр</th>
+              <th>В недельном плане</th>
+              <th>Размещено</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {Object.values(state.allocations ?? {}).map((a) => {
+              const reqs = Object.values(state.requirements).filter(
+                (r) => r.allocation_id === a.id,
+              );
+              const scheduled = Object.values(state.lessons)
+                .filter((l) => reqs.some((r) => r.id === l.requirement_id))
+                .reduce((s, l) => s + l.hours, 0);
+              return (
+                <tr key={a.id}>
+                  <td>
+                    <b>{state.subjects[a.subject_id]?.name}</b>
+                    <small>{names(state.groups, a.group_ids)}</small>
+                  </td>
+                  <td>
+                    {labels[a.kind]}
+                    <small>
+                      {names(state.teachers, a.teacher_ids)}
+                      {a.teacher_mode === "together" ? " · вместе" : ""}
+                    </small>
+                  </td>
+                  <td>
+                    {a.start_date} — {a.end_date}
+                    <small>{a.period}</small>
+                  </td>
+                  <td>{a.hours} ч.</td>
+                  <td>{reqs.reduce((s, r) => s + r.hours, 0)} ч.</td>
+                  <td>{scheduled} ч.</td>
+                  <td className="table-actions">
+                    <button
+                      className="icon-button"
+                      aria-label="Редактировать семестровую нагрузку"
+                      onClick={() => {
+                        setItem(a);
+                        editor(true);
+                      }}
+                    >
+                      <Pencil size={16} />
+                    </button>
+                    <button
+                      className="icon-button"
+                      aria-label="Удалить семестровую нагрузку"
+                      onClick={async () => {
+                        if (
+                          window.confirm(
+                            "Удалить назначение? Связанную недельную нагрузку сначала нужно отвязать или удалить.",
+                          )
+                        ) {
+                          try {
+                            await save(
+                              `/allocations/${a.id}?version=${version}`,
+                              undefined,
+                              "DELETE",
+                            );
+                          } catch {}
+                        }
+                      }}
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {!Object.keys(state.allocations ?? {}).length && (
+        <div className="empty compact">
+          Загрузите распределение педнагрузки Word или внесите назначение
+          вручную.
+        </div>
+      )}
+      {item && (
+        <AllocationEditor
+          state={state}
+          version={version}
+          save={save}
+          item={item}
+          week={week}
+          onClose={() => {
+            setItem(null);
+            editor(false);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function AllocationEditor({
+  state,
+  version,
+  item,
+  week,
+  save,
+  onClose,
+}: {
+  state: College;
+  version: number;
+  item: Item;
+  week: string;
+  save: Save;
+  onClose: () => void;
+}) {
+  const [form, setForm] = useState<Item>({
+      subject_id: "",
+      group_ids: [],
+      teacher_ids: [],
+      teacher_mode: "alternative",
+      kind: "theory",
+      hours: 1,
+      start_date: week,
+      end_date: week,
+      period: "",
+      note: "",
+      update_linked: false,
+      ...item,
+    }),
+    [baseVersion] = useState(version),
+    [error, setError] = useState("");
+  const patch = (k: string, v: any) => setForm((f) => ({ ...f, [k]: v }));
+  return (
+    <Modal title="Назначение на семестр" onClose={onClose}>
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          try {
+            await save(`/allocations/${item.id ?? uid()}`, {
+              version: baseVersion,
+              item: form,
+            });
+            onClose();
+          } catch (x) {
+            setError((x as Error).message);
+          }
+        }}
+      >
+        <div className="modal-body">
+          <Field label="Дисциплина / раздел">
+            <Pick
+              items={Object.values(state.subjects)}
+              value={form.subject_id}
+              onChange={(v) => patch("subject_id", v)}
+            />
+          </Field>
+          <div className="form-grid">
+            <Field label="Начало периода">
+              <input
+                type="date"
+                required
+                value={form.start_date}
+                onChange={(e) => patch("start_date", e.target.value)}
+              />
+            </Field>
+            <Field label="Окончание периода">
+              <input
+                type="date"
+                required
+                value={form.end_date}
+                onChange={(e) => patch("end_date", e.target.value)}
+              />
+            </Field>
+            <Field label="Вид">
+              <select
+                value={form.kind}
+                onChange={(e) => patch("kind", e.target.value)}
+              >
+                {Object.entries(labels).map(([v, l]) => (
+                  <option key={v} value={v}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Часы за весь период">
+              <input
+                type="number"
+                required
+                min={1}
+                max={3000}
+                value={form.hours}
+                onChange={(e) => patch("hours", Number(e.target.value))}
+              />
+            </Field>
+          </div>
+          <Field label="Название периода">
+            <input
+              value={form.period}
+              onChange={(e) => patch("period", e.target.value)}
+            />
+          </Field>
+          <Field
+            label="Группы общего занятия"
+            hint="Для самостоятельных занятий каждой группы создавайте отдельные назначения."
+          >
+            <Multi
+              items={Object.values(state.groups)}
+              value={form.group_ids}
+              onChange={(v) => patch("group_ids", v)}
+            />
+          </Field>
+          <Field label="Преподаватели">
+            <Multi
+              items={Object.values(state.teachers)}
+              value={form.teacher_ids}
+              onChange={(v) => patch("teacher_ids", v)}
+            />
+          </Field>
+          <TeacherModeField
+            value={form.teacher_mode}
+            onChange={(v) => patch("teacher_mode", v)}
+          />
+          <Field label="Примечание / решение по исходным данным">
+            <textarea
+              value={form.note}
+              onChange={(e) => patch("note", e.target.value)}
+            />
+          </Field>
+          {Object.values(state.requirements).some(
+            (r) => r.allocation_id === item.id,
+          ) && (
+            <label className="checkbox acknowledgment">
+              <input
+                type="checkbox"
+                checked={form.update_linked}
+                onChange={(e) => patch("update_linked", e.target.checked)}
+              />
+              Обновить состав и преподавателей во всех связанных недельных
+              назначениях и занятиях. Конфликты, часы и даты проверятся до
+              сохранения.
+            </label>
+          )}
+          {item.source_ref && (
+            <Notice>
+              Исходная ячейка сохранена. Изменения записываются в историю.
+            </Notice>
+          )}
+          {error && <Notice error>{error}</Notice>}
+        </div>
+        <div className="modal-footer">
+          <Button type="button" onClick={onClose}>
+            Отмена
+          </Button>
+          <Button className="primary">Сохранить</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+const splitNames = (value: string) =>
+  value
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+function WordLoadImport({
+  state,
+  version,
+  document,
+  save,
+  onClose,
+}: {
+  state: College;
+  version: number;
+  document: Item;
+  save: Save;
+  onClose: () => void;
+}) {
+  const p = document.preview;
+  const [tableKey, setTable] = useState(p.tables[0]?.key ?? ""),
+    [start, setStart] = useState(""),
+    [end, setEnd] = useState(""),
+    [period, setPeriod] = useState(p.tables[0]?.context ?? ""),
+    [ack, setAck] = useState(false),
+    [drafts, setDrafts] = useState<Record<string, Item>>({}),
+    [groupMeta, setGroupMeta] = useState<Record<string, Item>>({}),
+    [baseVersion] = useState(version),
+    [error, setError] = useState(""),
+    [busy, setBusy] = useState(false);
+  const table = p.tables.find((t: Item) => t.key === tableKey);
+  const defaultDraft = (e: Item): Item => ({
+    selected: false,
+    subject: e.subject,
+    subject_id: "",
+    kind: e.kind,
+    hours: e.hours ?? "",
+    note: "",
+    assignments: (e.assignments.length
+      ? e.assignments
+      : [{ groups: e.groups, teachers: e.teachers }]
+    ).map((a: Item) => ({
+      groups: a.groups.join("; "),
+      teachers: a.teachers.join("; "),
+      joint: false,
+      teacher_mode: "alternative",
+    })),
+  });
+  const draft = (e: Item): Item => drafts[e.key] ?? defaultDraft(e);
+  const patch = (e: Item, changes: Item) => {
+    setAck(false);
+    setDrafts((d) => ({
+      ...d,
+      [e.key]: { ...(d[e.key] ?? defaultDraft(e)), ...changes },
+    }));
+  };
+  const selected = (table?.entries ?? []).filter(
+    (e: Item) => draft(e).selected && e.kind !== "self_study",
+  );
+  const newGroups = [
+    ...new Set<string>(
+      selected.flatMap((e: Item) =>
+        draft(e).assignments.flatMap((a: Item) => splitNames(a.groups)),
+      ),
+    ),
+  ].filter(
+    (n) =>
+      !Object.values(state.groups).some(
+        (g) => g.name.toLowerCase() === n.toLowerCase(),
+      ),
+  );
+  const metadata = (n: string) =>
+    groupMeta[n] ?? {
+      program: p.paragraphs.some((v: string) => v.includes("Акушерское"))
+        ? "Акушерское дело"
+        : p.paragraphs.some((v: string) => /лечебное/i.test(v))
+          ? "Лечебное дело"
+          : "",
+      course: Number(n.match(/^\d+/)?.[0] ?? 1),
+      base: n.includes("-9") ? "9" : "11",
+      entry_year: n.match(/\d(\d{2})[бкс]?$/i)
+        ? 2000 + Number(n.match(/\d(\d{2})[бкс]?$/i)![1])
+        : "",
+    };
+  return (
+    <Modal title="Проверка семестровой нагрузки Word" wide onClose={onClose}>
+      <div className="modal-body">
+        <p className="document-name">{p.filename}</p>
+        <Notice>
+          Проверьте каждую выбранную ячейку. Семестровые часы хранятся отдельно
+          от недель КУГ. Объединённые занятия, совместное ведение и состав
+          преподавателей задаются явно. Разные написания названий создают разные
+          записи справочника.
+        </Notice>
+        <details>
+          <summary>Заголовки документа и исходные таблицы</summary>
+          {p.paragraphs.map((s: string, i: number) => (
+            <p key={i}>{s}</p>
+          ))}
+          <div className="grid-scroll">
+            <table className="data-table">
+              <tbody>
+                {table?.rows.map((row: Item[], i: number) => (
+                  <tr key={i}>
+                    {row.map((c, j) => (
+                      <td
+                        key={j}
+                        colSpan={c.span}
+                        style={{ whiteSpace: "pre-wrap" }}
+                      >
+                        {c.text || (c.merge === "continue" ? "↳" : "")}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+        <div className="form-grid">
+          <Field label="Таблица / семестр">
+            <select
+              value={tableKey}
+              onChange={(e) => {
+                setTable(e.target.value);
+                setPeriod(
+                  p.tables.find((t: Item) => t.key === e.target.value)
+                    ?.context ?? "",
+                );
+                setAck(false);
+              }}
+            >
+              {p.tables.map((t: Item) => (
+                <option value={t.key} key={t.key}>
+                  {Number(t.key) + 1}. {t.context || "Без подписи семестра"}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Название периода">
+            <input
+              value={period}
+              onChange={(e) => {
+                setPeriod(e.target.value);
+                setAck(false);
+              }}
+            />
+          </Field>
+          <Field label="Подтверждённое начало семестра">
+            <input
+              type="date"
+              value={start}
+              onChange={(e) => {
+                setStart(e.target.value);
+                setAck(false);
+              }}
+            />
+          </Field>
+          <Field label="Подтверждённое окончание семестра">
+            <input
+              type="date"
+              value={end}
+              onChange={(e) => {
+                setEnd(e.target.value);
+                setAck(false);
+              }}
+            />
+          </Field>
+        </div>
+        <p>
+          Выбрано ячеек: {selected.length} из {table?.entries.length}.
+          Распознанные варианты остаются черновиком до подтверждения.
+        </p>
+        <datalist id="word-group-names">
+          {Object.values(state.groups).map((g) => (
+            <option value={g.name} key={g.id} />
+          ))}
+        </datalist>
+        <datalist id="word-teacher-names">
+          {Object.values(state.teachers).map((t) => (
+            <option value={t.name} key={t.id} />
+          ))}
+        </datalist>
+        <div className="word-entries">
+          {table?.entries.map((e: Item) => {
+            const d = draft(e);
+            return (
+              <details
+                key={e.key}
+                className="word-entry"
+                data-source-key={e.key}
+              >
+                <summary>
+                  <span className={`badge ${e.kind}`}>
+                    {labels[e.kind] ??
+                      (e.kind === "self_study"
+                        ? "Самостоятельная работа"
+                        : "Укажите вид")}
+                  </span>{" "}
+                  {e.subject} <b>· {e.hours ?? "?"} ч.</b>{" "}
+                  <small>
+                    Строка {e.row}, столбец {e.column}
+                    {d.selected ? " · выбрано" : ""}
+                    {e.warnings.length ? " · нужна проверка" : ""}
+                  </small>
+                </summary>
+                <div className="word-entry-body">
+                  <pre className="source-cell">{e.raw}</pre>
+                  {e.warnings.map((w: string, i: number) => (
+                    <Notice key={i}>{w}</Notice>
+                  ))}
+                  {e.kind === "self_study" ? (
+                    <p>
+                      Самостоятельная работа сохраняется в источнике и не
+                      включается в занятия.
+                    </p>
+                  ) : (
+                    <>
+                      <label className="checkbox">
+                        <input
+                          type="checkbox"
+                          checked={d.selected}
+                          onChange={(v) =>
+                            patch(e, { selected: v.target.checked })
+                          }
+                        />
+                        Включить после проверки
+                      </label>
+                      <Field label="Дисциплина / раздел в справочнике">
+                        <Pick
+                          items={Object.values(state.subjects)}
+                          value={d.subject_id}
+                          empty="Создать по названию ниже"
+                          onChange={(v) => patch(e, { subject_id: v })}
+                        />
+                      </Field>
+                      {!d.subject_id && (
+                        <Field label="Название дисциплины / раздела">
+                          <input
+                            value={d.subject}
+                            onChange={(v) =>
+                              patch(e, { subject: v.target.value })
+                            }
+                          />
+                        </Field>
+                      )}
+                      <div className="form-grid">
+                        <Field label="Вид подтверждённой нагрузки">
+                          <select
+                            value={d.kind}
+                            onChange={(v) => patch(e, { kind: v.target.value })}
+                          >
+                            <option value="unknown">Выберите вид</option>
+                            {Object.entries(labels).map(([v, l]) => (
+                              <option key={v} value={v}>
+                                {l}
+                              </option>
+                            ))}
+                          </select>
+                        </Field>
+                        <Field label="Подтверждённые часы на семестр для каждой группы">
+                          <input
+                            type="number"
+                            min={1}
+                            max={3000}
+                            value={d.hours}
+                            onChange={(v) =>
+                              patch(e, {
+                                hours:
+                                  v.target.value === ""
+                                    ? ""
+                                    : Number(v.target.value),
+                              })
+                            }
+                          />
+                        </Field>
+                      </div>
+                      {d.assignments.map((a: Item, i: number) => {
+                        const update = (changes: Item) =>
+                          patch(e, {
+                            assignments: d.assignments.map(
+                              (x: Item, j: number) =>
+                                i === j ? { ...x, ...changes } : x,
+                            ),
+                          });
+                        return (
+                          <div className="word-assignment" key={i}>
+                            <div className="form-grid">
+                              <Field label="Названия групп через ;">
+                                <input
+                                  list="word-group-names"
+                                  value={a.groups}
+                                  onChange={(v) =>
+                                    update({ groups: v.target.value })
+                                  }
+                                />
+                              </Field>
+                              <Field label="ФИО преподавателей через ;">
+                                <input
+                                  list="word-teacher-names"
+                                  value={a.teachers}
+                                  onChange={(v) =>
+                                    update({ teachers: v.target.value })
+                                  }
+                                />
+                              </Field>
+                            </div>
+                            <div className="form-grid">
+                              <Field label="Как занимаются группы">
+                                <select
+                                  value={a.joint ? "joint" : "separate"}
+                                  onChange={(v) =>
+                                    update({
+                                      joint: v.target.value === "joint",
+                                    })
+                                  }
+                                >
+                                  <option value="separate">
+                                    Каждая группа отдельно
+                                  </option>
+                                  <option value="joint">
+                                    Все эти группы совместно
+                                  </option>
+                                </select>
+                              </Field>
+                              <TeacherModeField
+                                value={a.teacher_mode}
+                                onChange={(v) => update({ teacher_mode: v })}
+                              />
+                            </div>
+                            <Button
+                              onClick={() =>
+                                patch(e, {
+                                  assignments: d.assignments.filter(
+                                    (_: Item, j: number) => j !== i,
+                                  ),
+                                })
+                              }
+                            >
+                              Убрать назначение
+                            </Button>
+                          </div>
+                        );
+                      })}
+                      <Button
+                        onClick={() =>
+                          patch(e, {
+                            assignments: [
+                              ...d.assignments,
+                              {
+                                groups: "",
+                                teachers: "",
+                                joint: false,
+                                teacher_mode: "alternative",
+                              },
+                            ],
+                          })
+                        }
+                      >
+                        <Plus size={16} />
+                        Добавить назначение
+                      </Button>
+                      <Field
+                        label="Решение по неоднозначным часам / примечание"
+                        hint="Для составных записей часов поясните, какие часы включены. Другие виды нагрузки добавьте отдельно в семестровом плане."
+                      >
+                        <textarea
+                          value={d.note}
+                          onChange={(v) => patch(e, { note: v.target.value })}
+                        />
+                      </Field>
+                    </>
+                  )}
+                </div>
+              </details>
+            );
+          })}
+        </div>
+        {!!newGroups.length && (
+          <>
+            <h3>Проверьте новые группы</h3>
+            <Notice>
+              Название, курс, база и год набора должны соответствовать текущим
+              группам колледжа. Предложенные значения получены из обозначений в
+              документе.
+            </Notice>
+            {newGroups.map((n) => {
+              const m = metadata(n);
+              const update = (k: string, v: any) => {
+                setAck(false);
+                setGroupMeta((g) => ({ ...g, [n]: { ...m, [k]: v } }));
+              };
+              return (
+                <div className="word-assignment" key={n}>
+                  <b>{n}</b>
+                  <div className="form-grid">
+                    <Field label="Программа">
+                      <input
+                        value={m.program}
+                        onChange={(e) => update("program", e.target.value)}
+                      />
+                    </Field>
+                    <Field label="Курс">
+                      <input
+                        type="number"
+                        min={1}
+                        max={6}
+                        value={m.course}
+                        onChange={(e) =>
+                          update("course", Number(e.target.value))
+                        }
+                      />
+                    </Field>
+                    <Field label="База">
+                      <select
+                        value={m.base}
+                        onChange={(e) => update("base", e.target.value)}
+                      >
+                        <option value="9">9 классов</option>
+                        <option value="11">11 классов</option>
+                      </select>
+                    </Field>
+                    <Field label="Год набора">
+                      <input
+                        type="number"
+                        min={2000}
+                        max={2100}
+                        value={m.entry_year}
+                        onChange={(e) =>
+                          update(
+                            "entry_year",
+                            e.target.value === "" ? "" : Number(e.target.value),
+                          )
+                        }
+                      />
+                    </Field>
+                  </div>
+                </div>
+              );
+            })}
+          </>
+        )}
+        <label className="checkbox acknowledgment">
+          <input
+            type="checkbox"
+            checked={ack}
+            onChange={(e) => setAck(e.target.checked)}
+          />
+          Я проверил даты семестра, часы, названия групп и преподавателей,
+          совместные занятия и новые записи справочников.
+        </label>
+        {error && <Notice error>{error}</Notice>}
+      </div>
+      <div className="modal-footer">
+        <a
+          className="text-button"
+          href={`/api/imports/${document.id}/original`}
+        >
+          Исходный Word
+        </a>
+        <span className="spacer" />
+        <Button onClick={onClose}>Отмена</Button>
+        <Button
+          className="primary"
+          disabled={busy || !ack || !start || !end || !selected.length}
+          onClick={async () => {
+            setBusy(true);
+            setError("");
+            try {
+              const entries = selected.map((e: Item) => {
+                const d = draft(e);
+                if (
+                  !labels[d.kind] ||
+                  !Number.isInteger(d.hours) ||
+                  d.hours < 1 ||
+                  !d.assignments.length
+                )
+                  throw new Error(
+                    "Проверьте вид, целые часы и назначения всех выбранных ячеек",
+                  );
+                if (e.hours === null && d.note.trim().length < 5)
+                  throw new Error("Поясните решение по неоднозначным часам");
+                return {
+                  key: e.key,
+                  subject: d.subject,
+                  subject_id: d.subject_id || null,
+                  kind: d.kind,
+                  hours: d.hours,
+                  note: d.note,
+                  assignments: d.assignments.map((a: Item) => ({
+                    ...a,
+                    groups: splitNames(a.groups),
+                    teachers: splitNames(a.teachers),
+                  })),
+                };
+              });
+              const groups = Object.fromEntries(
+                newGroups.map((n) => {
+                  const m = metadata(n);
+                  if (
+                    !m.program.trim() ||
+                    !m.entry_year ||
+                    m.course < 1 ||
+                    m.course > 6
+                  )
+                    throw new Error(
+                      "Подтвердите программу, курс и год набора новых групп",
+                    );
+                  return [n, m];
+                }),
+              );
+              await save(
+                `/imports/${document.id}/term-load`,
+                {
+                  version: baseVersion,
+                  item: {
+                    entries,
+                    groups,
+                    start_date: start,
+                    end_date: end,
+                    period,
+                    acknowledged: ack,
+                  },
+                },
+                "POST",
+              );
+              onClose();
+            } catch (x) {
+              setError((x as Error).message);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          Сохранить семестровые назначения
         </Button>
       </div>
     </Modal>

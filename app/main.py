@@ -16,17 +16,21 @@ from .config import settings
 from .db import Audit, GenerationJob, ImportDocument, User, Workspace, health, now
 from .domain import (
     CATALOG_MODELS,
+    Allocation,
     CollegeSettings,
     Lesson,
     Requirement,
     State,
     Subject,
+    Teacher,
+    Group,
     uid,
 )
 from .export import export_schedule, load_template
 from .imports import parse_kug, parse_load
+from .word_load import parse_word_load
 from .storage import StaleVersion, mutate, read_state
-from .validation import RuleError, report, validate
+from .validation import RuleError, report, validate, leaf_groups
 
 app = FastAPI(
     title="Расписание колледжа", version="0.1.0", docs_url=None, redoc_url=None
@@ -318,7 +322,7 @@ def restore(target: int, body: Lease, auth=Depends(identity), db=Depends(db_sess
 @app.post("/api/imports")
 def upload(
     file: UploadFile,
-    kind: Literal["kug", "load"],
+    kind: Literal["kug", "load", "term_load"],
     auth=Depends(identity),
     db=Depends(db_session),
 ):
@@ -326,18 +330,21 @@ def upload(
     if len(raw) > settings.upload_limit_mb * 1024 * 1024:
         raise RuleError("Файл превышает допустимый размер")
     filename = Path(file.filename or "document.xlsx").name[:300]
-    if not filename.casefold().endswith(".xlsx"):
-        raise RuleError("Загрузите файл .xlsx")
+    suffix = ".docx" if kind == "term_load" else ".xlsx"
+    if not filename.casefold().endswith(suffix):
+        raise RuleError(f"Загрузите файл {suffix}")
     key = hashlib.sha256(raw).hexdigest()
     existing = db.scalar(select(ImportDocument).where(ImportDocument.digest == key))
     if existing:
         if existing.preview["format"] != kind:
             raise RuleError("Этот файл уже загружен как документ другого типа")
         return {"id": existing.id, "preview": existing.preview, "duplicate": True}
-    preview = parse_kug(raw, filename) if kind == "kug" else parse_load(raw, filename)
+    preview = {"kug": parse_kug, "load": parse_load, "term_load": parse_word_load}[
+        kind
+    ](raw, filename)
     document = ImportDocument(id=uid(), digest=key, filename=filename, preview=preview)
     settings.data_dir.mkdir(parents=True, exist_ok=True)
-    (settings.data_dir / f"{key}.xlsx").write_bytes(raw)
+    (settings.data_dir / f"{key}{suffix}").write_bytes(raw)
     db.add(document)
     db.commit()
     return {"id": document.id, "preview": preview, "duplicate": False}
@@ -369,7 +376,10 @@ def original(doc_id: str, auth=Depends(identity), db=Depends(db_session)):
     doc = db.get(ImportDocument, doc_id)
     if doc is None:
         raise HTTPException(404, "Документ не найден")
-    return FileResponse(settings.data_dir / f"{doc.digest}.xlsx", filename=doc.filename)
+    suffix = ".docx" if doc.preview["format"] == "term_load" else ".xlsx"
+    return FileResponse(
+        settings.data_dir / f"{doc.digest}{suffix}", filename=doc.filename
+    )
 
 
 @app.post("/api/imports/{doc_id}/kug")
@@ -420,49 +430,103 @@ def confirm_kug(
             if row["kind"] == "self_study":
                 continue
             mapping = selected[row["key"]]
-            subject_id = mapping.get("subject_id")
-            if not subject_id:
-                title = row["name"]
-                existing = [
-                    x
-                    for x in s.subjects.values()
-                    if x.name == title and x.code == row["code"]
-                ]
-                subject = (
-                    existing[0] if existing else Subject(name=title, code=row["code"])
-                )
-                s.subjects[subject.id] = subject
-                subject_id = subject.id
             kind = mapping.get("kind", row["kind"])
-            participants = (
-                [groups]
-                if kind == "theory" or mapping.get("joint")
-                else [[g] for g in groups]
-            )
-            for group_set in participants:
-                source = f"{doc_id}:{sheet['key']}:{row['key']}:{item['week_key']}:{','.join(sorted(group_set))}"
+            allocated = mapping.get("allocations", [])
+            definitions = []
+            if allocated:
+                coverage = {g: 0 for g in leaf_groups(s, groups)}
+                seen_allocations = set()
+                for selected_allocation in allocated:
+                    aid = selected_allocation.get("allocation_id")
+                    a = s.allocations.get(aid)
+                    if a is None or aid in seen_allocations or a.kind != kind:
+                        raise RuleError(
+                            "Выберите разные семестровые записи нужного вида"
+                        )
+                    seen_allocations.add(aid)
+                    hours = selected_allocation.get(
+                        "hours", row["hours"][item["week_key"]]
+                    )
+                    if (
+                        not isinstance(hours, int)
+                        or isinstance(hours, bool)
+                        or hours < 1
+                    ):
+                        raise RuleError(
+                            "Укажите целые положительные недельные часы для каждого назначения"
+                        )
+                    leaves = leaf_groups(s, a.group_ids)
+                    if not leaves <= coverage.keys():
+                        raise RuleError(
+                            "Семестровое назначение включает группы вне выбранного состава"
+                        )
+                    for g in leaves:
+                        coverage[g] += hours
+                    definitions.append(
+                        dict(
+                            subject_id=a.subject_id,
+                            group_ids=a.group_ids,
+                            teacher_ids=a.teacher_ids,
+                            teacher_mode=a.teacher_mode,
+                            allocation_id=a.id,
+                            hours=hours,
+                        )
+                    )
+                if any(h != row["hours"][item["week_key"]] for h in coverage.values()):
+                    raise RuleError(
+                        "Часы выбранных семестровых назначений должны точно закрывать строку КУГ для каждой группы"
+                    )
+            else:
+                subject_id = mapping.get("subject_id")
+                if not subject_id:
+                    title = row["name"]
+                    existing = [
+                        x
+                        for x in s.subjects.values()
+                        if x.name == title and x.code == row["code"]
+                    ]
+                    subject = (
+                        existing[0]
+                        if existing
+                        else Subject(name=title, code=row["code"])
+                    )
+                    s.subjects[subject.id] = subject
+                    subject_id = subject.id
+                participants = (
+                    [groups]
+                    if kind == "theory" or mapping.get("joint")
+                    else [[g] for g in groups]
+                )
+                definitions = [
+                    dict(
+                        subject_id=subject_id,
+                        group_ids=gs,
+                        teacher_ids=mapping.get("teacher_ids", []),
+                        teacher_mode=mapping.get("teacher_mode", "alternative"),
+                        hours=row["hours"][item["week_key"]],
+                    )
+                    for gs in participants
+                ]
+            for definition in definitions:
+                source = f"{doc_id}:{sheet['key']}:{row['key']}:{item['week_key']}:{','.join(sorted(definition['group_ids']))}:{definition.get('allocation_id', '')}"
                 if any(
                     r.week == week and r.source_ref == source
                     for r in s.requirements.values()
                 ):
                     raise RuleError("Дублирующая строка импорта")
                 req = Requirement(
-                    subject_id=subject_id,
-                    group_ids=group_set,
-                    teacher_ids=mapping.get("teacher_ids", []),
+                    **definition,
                     room_ids=mapping.get("room_ids", []),
                     week=week,
                     kind=kind,
-                    hours=row["hours"][item["week_key"]],
                     block_hours=mapping.get("block_hours", 2),
                     source_ref=source,
                 )
-                # Distinct source revisions must not double the same confirmed need.
                 if any(
                     r.week == week
-                    and r.subject_id == subject_id
+                    and r.subject_id == req.subject_id
                     and r.kind == kind
-                    and set(r.group_ids) == set(group_set)
+                    and set(r.group_ids) == set(req.group_ids)
                     for r in s.requirements.values()
                 ):
                     raise RuleError(
@@ -483,6 +547,223 @@ def confirm_kug(
 
     v, _ = mutate(db, body.version, auth[0].id, "Подтверждение недели КУГ", change)
     return {"version": v}
+
+
+@app.put("/api/allocations/{item_id}")
+def put_allocation(
+    item_id: str, body: Change, auth=Depends(identity), db=Depends(db_session)
+):
+    values = dict(body.item)
+    update_linked = values.pop("update_linked", False)
+    parsed = Allocation.model_validate({**values, "id": item_id})
+
+    def change(s):
+        s.allocations[item_id] = parsed
+        if update_linked:
+            linked = {
+                r.id for r in s.requirements.values() if r.allocation_id == item_id
+            }
+            for rid in linked:
+                r = s.requirements[rid]
+                for key in (
+                    "subject_id",
+                    "group_ids",
+                    "teacher_ids",
+                    "teacher_mode",
+                    "kind",
+                ):
+                    setattr(r, key, getattr(parsed, key))
+            for l in s.lessons.values():
+                if l.requirement_id not in linked:
+                    continue
+                if parsed.teacher_mode == "together":
+                    l.teacher_ids = parsed.teacher_ids
+                elif len(parsed.teacher_ids) == 1:
+                    l.teacher_ids = parsed.teacher_ids
+                elif not set(l.teacher_ids) <= set(parsed.teacher_ids):
+                    raise RuleError(
+                        "Для замены в существующем занятии укажите единственного преподавателя или сохраните его текущего преподавателя в списке"
+                    )
+                for key in ("subject_id", "group_ids", "kind"):
+                    setattr(l, key, getattr(parsed, key))
+
+    v, _ = mutate(
+        db, body.version, auth[0].id, "Изменение семестровой нагрузки", change
+    )
+    return {"version": v}
+
+
+@app.delete("/api/allocations/{item_id}")
+def delete_allocation(
+    item_id: str, version: int, auth=Depends(identity), db=Depends(db_session)
+):
+    def change(s):
+        if item_id not in s.allocations:
+            raise HTTPException(404, "Семестровая нагрузка не найдена")
+        del s.allocations[item_id]
+
+    v, _ = mutate(db, version, auth[0].id, "Удаление семестровой нагрузки", change)
+    return {"version": v}
+
+
+@app.post("/api/imports/{doc_id}/term-load")
+def confirm_term_load(
+    doc_id: str, body: Change, auth=Depends(identity), db=Depends(db_session)
+):
+    doc = db.get(ImportDocument, doc_id)
+    if doc is None or doc.preview["format"] != "term_load":
+        raise HTTPException(404, "Семестровая нагрузка не найдена")
+    item = body.item
+    if not item.get("acknowledged"):
+        raise RuleError(
+            "Подтвердите проверку часов, групп, преподавателей и дат семестра"
+        )
+    source = {e["key"]: e for t in doc.preview["tables"] for e in t["entries"]}
+    selected = item.get("entries", [])
+    if not selected or len(selected) > 500:
+        raise RuleError("Выберите от 1 до 500 ячеек нагрузки")
+
+    def change(s):
+        count = 0
+        seen = set()
+
+        def resolve(names, catalog, model):
+            ids = []
+            if not isinstance(names, list) or not names:
+                raise RuleError("Укажите названия групп и преподавателей")
+            for value in names:
+                name = str(value).strip()
+                if not name or name in [catalog[i].name for i in ids]:
+                    raise RuleError("Названия не должны быть пустыми или повторяться")
+                matches = [
+                    x for x in catalog.values() if x.name.casefold() == name.casefold()
+                ]
+                if len(matches) > 1:
+                    raise RuleError(f"«{name}»: неоднозначный справочник")
+                if matches:
+                    entry = matches[0]
+                elif model is Group:
+                    metadata = item.get("groups", {}).get(name)
+                    if not isinstance(metadata, dict):
+                        raise RuleError(
+                            f"«{name}»: подтвердите программу, курс, базу и год набора новой группы"
+                        )
+                    if not metadata.get("program") or any(
+                        metadata.get(k) is None
+                        for k in ("course", "base", "entry_year")
+                    ):
+                        raise RuleError(
+                            "Для новой группы обязательны программа, курс, база и год набора"
+                        )
+                    entry = Group.model_validate(
+                        {
+                            **{
+                                k: v
+                                for k, v in metadata.items()
+                                if k not in ("id", "name")
+                            },
+                            "name": name,
+                        }
+                    )
+                else:
+                    entry = model(name=name)
+                catalog[entry.id] = entry
+                ids.append(entry.id)
+            return ids
+
+        for reviewed in selected:
+            key = reviewed.get("key")
+            if key not in source or key in seen:
+                raise RuleError("Ячейка не найдена или выбрана повторно")
+            seen.add(key)
+            original = source[key]
+            if original["kind"] == "self_study":
+                raise RuleError(
+                    "Самостоятельную работу нельзя превращать в занятия расписания"
+                )
+            if (
+                original["hours"] is None
+                and len(str(reviewed.get("note", "")).strip()) < 5
+            ):
+                raise RuleError(
+                    "Поясните решение по неоднозначным часам исходной ячейки"
+                )
+            for value in (item.get("start_date"), item.get("end_date")):
+                try:
+                    date.fromisoformat(str(value))
+                except ValueError:
+                    raise RuleError("Укажите подтверждённые даты семестра")
+            source_ref = f"{doc_id}:{key}:{item['start_date']}:{item['end_date']}"
+            if any(a.source_ref == source_ref for a in s.allocations.values()):
+                raise RuleError(
+                    "Эта ячейка на указанный период уже подтверждена. Редактируйте семестровую нагрузку"
+                )
+            assignments = reviewed.get("assignments", [])
+            if not assignments:
+                raise RuleError("Для каждой выбранной ячейки нужны назначения")
+            title = str(reviewed.get("subject", original["subject"])).strip()
+            sid = reviewed.get("subject_id")
+            if sid:
+                if sid not in s.subjects:
+                    raise RuleError("Дисциплина не найдена")
+            else:
+                matches = [
+                    x
+                    for x in s.subjects.values()
+                    if x.name.casefold() == title.casefold()
+                ]
+                if len(matches) > 1:
+                    raise RuleError(
+                        "Дисциплина неоднозначна: выберите запись справочника"
+                    )
+                subject = matches[0] if matches else Subject(name=title)
+                s.subjects[subject.id] = subject
+                sid = subject.id
+            used_groups = set()
+            for assignment in assignments:
+                group_ids = resolve(assignment.get("groups"), s.groups, Group)
+                teacher_ids = resolve(assignment.get("teachers"), s.teachers, Teacher)
+                if used_groups.intersection(group_ids):
+                    raise RuleError(
+                        "Группа повторяется в одной ячейке. Разделите часы и виды нагрузки отдельными исходными ячейками"
+                    )
+                used_groups.update(group_ids)
+                sets = (
+                    [group_ids] if assignment.get("joint") else [[g] for g in group_ids]
+                )
+                for participants in sets:
+                    a = Allocation(
+                        subject_id=sid,
+                        group_ids=participants,
+                        teacher_ids=teacher_ids,
+                        teacher_mode=assignment.get("teacher_mode", "alternative"),
+                        kind=reviewed.get("kind", original["kind"]),
+                        hours=reviewed.get("hours"),
+                        start_date=item["start_date"],
+                        end_date=item["end_date"],
+                        period=item.get("period", ""),
+                        source_ref=source_ref,
+                        note=reviewed.get("note", ""),
+                    )
+                    if any(
+                        x.subject_id == a.subject_id
+                        and x.kind == a.kind
+                        and set(x.group_ids) == set(a.group_ids)
+                        and x.start_date <= a.end_date
+                        and a.start_date <= x.end_date
+                        for x in s.allocations.values()
+                    ):
+                        raise RuleError(
+                            "У этих групп уже есть семестровая нагрузка по дисциплине и виду. Сверьте запись или уточните раздел дисциплины"
+                        )
+                    s.allocations[a.id] = a
+                    count += 1
+        return count
+
+    v, count = mutate(
+        db, body.version, auth[0].id, "Подтверждение семестровой нагрузки Word", change
+    )
+    return {"version": v, "count": count}
 
 
 @app.post("/api/imports/{doc_id}/load")
@@ -590,6 +871,8 @@ def confirm_load(
                     )
                 req.id = matches[0].id
                 req.source_ref = matches[0].source_ref
+                req.allocation_id = matches[0].allocation_id
+                req.teacher_mode = matches[0].teacher_mode
             s.requirements[req.id] = req
             count += 1
         return count

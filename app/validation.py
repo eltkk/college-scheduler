@@ -54,7 +54,15 @@ def overlap(a: Lesson, b: Lesson):
 
 
 def valid_references(state: State):
-    for name in ["teachers", "groups", "rooms", "subjects", "requirements", "lessons"]:
+    for name in [
+        "teachers",
+        "groups",
+        "rooms",
+        "subjects",
+        "requirements",
+        "allocations",
+        "lessons",
+    ]:
         for key, value in getattr(state, name).items():
             if key != value.id:
                 raise RuleError("Идентификатор записи изменять нельзя")
@@ -64,6 +72,7 @@ def valid_references(state: State):
         leaf_groups(state, [group.id])
     for kind, entries in [
         ("нагрузке", state.requirements.values()),
+        ("семестровой нагрузке", state.allocations.values()),
         ("занятии", state.lessons.values()),
     ]:
         for item in entries:
@@ -80,15 +89,60 @@ def valid_references(state: State):
                     raise RuleError(
                         f"Неверные или повторяющиеся группы/преподаватели в {kind}"
                     )
-            rooms = item.room_ids if kind == "нагрузке" else [item.room_id]
+            rooms = (
+                item.room_ids
+                if kind == "нагрузке"
+                else [item.room_id] if kind == "занятии" else []
+            )
             if len(set(rooms)) != len(rooms) or any(
                 x not in state.rooms for x in rooms
             ):
                 raise RuleError(f"Помещение в {kind} не найдено")
 
 
+def validate_allocations(state):
+    ranges = defaultdict(list)
+    for a in state.allocations.values():
+        for g in leaf_groups(state, a.group_ids):
+            ranges[a.subject_id, a.kind, g].append(a)
+    for entries in ranges.values():
+        ordered = sorted(entries, key=lambda a: a.start_date)
+        for previous, current in zip(ordered, ordered[1:]):
+            if current.start_date <= previous.end_date:
+                raise RuleError(
+                    "Пересекающиеся семестровые назначения одной дисциплины, вида и группы. Уточните раздел дисциплины или даты"
+                )
+    used = defaultdict(int)
+    for req in state.requirements.values():
+        if not req.allocation_id:
+            continue
+        a = state.allocations.get(req.allocation_id)
+        if a is None:
+            raise RuleError(
+                "Недельная нагрузка ссылается на удалённую семестровую запись"
+            )
+        if (
+            req.subject_id != a.subject_id
+            or req.kind != a.kind
+            or set(req.group_ids) != set(a.group_ids)
+            or set(req.teacher_ids) != set(a.teacher_ids)
+            or req.teacher_mode != a.teacher_mode
+        ):
+            raise RuleError(
+                "Недельные назначения должны соответствовать семестровой нагрузке"
+            )
+        if not req.week <= a.end_date or req.week + timedelta(days=6) < a.start_date:
+            raise RuleError("Неделя находится вне периода семестровой нагрузки")
+        used[a.id] += req.hours
+        if used[a.id] > a.hours:
+            raise RuleError(
+                f"«{state.subjects[a.subject_id].name}»: недельные часы превышают семестровые ({a.hours})"
+            )
+
+
 def validate(state: State):
     valid_references(state)
+    validate_allocations(state)
     lessons = list(state.lessons.values())
     participants = {x.id: leaf_groups(state, x.group_ids) for x in lessons}
     used_hours = defaultdict(int)
@@ -139,6 +193,16 @@ def validate(state: State):
                 raise RuleError(
                     "Преподаватель или помещение не разрешены для этой нагрузки"
                 )
+            if req.teacher_mode == "together" and set(lesson.teacher_ids) != set(
+                req.teacher_ids
+            ):
+                raise RuleError(
+                    "На совместном занятии должны присутствовать все назначенные преподаватели"
+                )
+            if req.allocation_id:
+                a = state.allocations[req.allocation_id]
+                if not a.start_date <= lesson.day <= a.end_date:
+                    raise RuleError("Занятие находится вне дат семестровой нагрузки")
             if not req.week <= lesson.day < req.week + timedelta(days=7):
                 raise RuleError("Занятие находится вне недели своей нагрузки")
             used_hours[req.id] += lesson.hours
@@ -286,6 +350,22 @@ def report(state: State, week=None):
         )
     if not rows:
         warnings.append("Для выбранной недели нет подтверждённой нагрузки")
+    if any(
+        not r.allocation_id
+        and any(
+            a.subject_id == r.subject_id
+            and a.kind == r.kind
+            and a.start_date <= r.week + timedelta(days=6)
+            and r.week <= a.end_date
+            and leaf_groups(state, r.group_ids) & leaf_groups(state, a.group_ids)
+            for a in state.allocations.values()
+        )
+        for r in state.requirements.values()
+        if week is None or r.week == week
+    ):
+        warnings.append(
+            "Есть недельные строки без связи с соответствующей семестровой нагрузкой. Свяжите их для контроля семестровых часов"
+        )
     return {
         "errors": errors,
         "warnings": warnings,

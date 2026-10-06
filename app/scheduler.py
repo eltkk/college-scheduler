@@ -103,14 +103,23 @@ def generate(state: State, week: date, group_ids: list[str]):
                 day = week + timedelta(days=weekday)
                 if day in state.settings.holidays:
                     continue
+                if req.allocation_id:
+                    allocation = state.allocations[req.allocation_id]
+                    if not allocation.start_date <= day <= allocation.end_date:
+                        continue
                 for start, end in periods(state, day, duration):
-                    for teacher in req.teacher_ids:
+                    teacher_sets = (
+                        [req.teacher_ids]
+                        if req.teacher_mode == "together"
+                        else [[t] for t in req.teacher_ids]
+                    )
+                    for teachers in teacher_sets:
                         for room in req.room_ids:
                             candidate = Lesson(
                                 requirement_id=req.id,
                                 subject_id=req.subject_id,
                                 group_ids=req.group_ids,
-                                teacher_ids=[teacher],
+                                teacher_ids=teachers,
                                 room_id=room,
                                 day=day,
                                 start=start,
@@ -122,9 +131,11 @@ def generate(state: State, week: date, group_ids: list[str]):
                             groups = group_family(
                                 state, list(participants)
                             ) | group_family(state, req.group_ids)
-                            resources = [state.teachers[teacher], state.rooms[room]] + [
-                                state.groups[g] for g in groups
-                            ]
+                            resources = (
+                                [state.teachers[t] for t in teachers]
+                                + [state.rooms[room]]
+                                + [state.groups[g] for g in groups]
+                            )
                             if not all(
                                 available(resource, day, start, end)
                                 for resource in resources
@@ -148,8 +159,9 @@ def generate(state: State, week: date, group_ids: list[str]):
                             variables.append((variable, candidate))
                             choices.append(variable)
                             objective.append(variable * (start // 10))
-                            teacher_day[teacher, day].append(variable * duration)
-                            teacher_week[teacher].append(variable * duration)
+                            for teacher in teachers:
+                                teacher_day[teacher, day].append(variable * duration)
+                                teacher_week[teacher].append(variable * duration)
                             for gid in leaf_groups(state, req.group_ids):
                                 group_day[gid, day].append(variable * duration)
                                 group_week[gid].append(variable * duration)
@@ -162,7 +174,8 @@ def generate(state: State, week: date, group_ids: list[str]):
                                 variable,
                                 f"i{len(variables)}",
                             )
-                            teacher_intervals[teacher].append(interval)
+                            for teacher in teachers:
+                                teacher_intervals[teacher].append(interval)
                             for gid in participants:
                                 group_intervals[gid].append(interval)
                             room_intervals[room].append(interval)

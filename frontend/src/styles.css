@@ -1523,3 +1523,42 @@ p {
     break-inside: avoid;
   }
 }
+.word-entries {
+  display: grid;
+  gap: 10px;
+  margin: 20px 0;
+}
+.word-entry {
+  border: 1px solid var(--line, #e1e7f0);
+  border-radius: 12px;
+  background: #fff;
+}
+.word-entry summary {
+  padding: 16px;
+  cursor: pointer;
+  line-height: 1.65;
+}
+.word-entry summary small {
+  display: block;
+  color: #64748b;
+}
+.word-entry-body {
+  padding: 0 18px 18px;
+}
+.source-cell {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  font-size: 14px;
+  padding: 16px;
+  border-radius: 10px;
+  background: #f1f5fa;
+  max-height: 260px;
+  overflow: auto;
+}
+.word-assignment {
+  margin: 14px 0;
+  padding: 16px;
+  border: 1px solid #dce4ee;
+  border-radius: 10px;
+}

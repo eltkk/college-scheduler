@@ -40,10 +40,10 @@ def classify(name):
         return "self_study"
     if "производствен" in v or "учебная" in v and "практик" in v:
         return "training"
-    if any(x in v for x in ["аттестац", "экзамен", "зачет", "зачёт", "гиа"]):
-        return "assessment"
     if "консульт" in v:
         return "consultation"
+    if any(x in v for x in ["аттестац", "экзамен", "зачет", "зачёт", "гиа"]):
+        return "assessment"
     if "курсов" in v or "курсова" in v:
         return "coursework"
     if "практич" in v:

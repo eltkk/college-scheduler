@@ -67,11 +67,12 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Browser flows with anonymous demo data
         run: |
+          python deploy/e2e_word_fixture.py
           docker compose exec -T web python -c 'from app.db import SessionLocal,Workspace,Audit; from app.demo import demo_state; from sqlalchemy import select; d=SessionLocal(); raw=demo_state().model_dump(mode="json"); d.get(Workspace,1).payload=raw; d.scalar(select(Audit).where(Audit.version==0)).snapshot=raw; d.commit()'
           cd frontend
           npm ci
           npx playwright install --with-deps chromium
-          npm run test:e2e
+          E2E_WORD_FILE=/tmp/college-e2e-word.docx npm run test:e2e
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

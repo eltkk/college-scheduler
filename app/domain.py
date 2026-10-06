@@ -67,6 +67,33 @@ class Subject(Named):
 LessonKind = Literal[
     "theory", "practice", "consultation", "assessment", "training", "coursework"
 ]
+TeacherMode = Literal["alternative", "together"]
+
+
+class Allocation(Model):
+    """Confirmed period workload. It never becomes weekly hours by itself."""
+
+    id: str = Field(default_factory=uid, min_length=1, max_length=64)
+    subject_id: str
+    group_ids: list[str] = Field(min_length=1)
+    teacher_ids: list[str] = Field(min_length=1)
+    teacher_mode: TeacherMode = "alternative"
+    kind: LessonKind = "theory"
+    hours: int = Field(ge=1, le=3000)
+    start_date: date
+    end_date: date
+    period: str = Field(default="", max_length=300)
+    source_ref: str = Field(default="", max_length=1000)
+    note: str = Field(default="", max_length=2000)
+
+    @model_validator(mode="after")
+    def dates(self):
+        if (
+            self.start_date > self.end_date
+            or (self.end_date - self.start_date).days > 366
+        ):
+            raise ValueError("Период нагрузки должен быть от одного дня до года")
+        return self
 
 
 class Requirement(Model):
@@ -74,6 +101,8 @@ class Requirement(Model):
     subject_id: str
     group_ids: list[str] = Field(min_length=1)
     teacher_ids: list[str] = Field(min_length=1)
+    teacher_mode: TeacherMode = "alternative"
+    allocation_id: str | None = None
     room_ids: list[str] = Field(min_length=1)
     week: date
     kind: LessonKind = "theory"
@@ -161,6 +190,7 @@ class State(Model):
     rooms: dict[str, Room] = Field(default_factory=dict)
     subjects: dict[str, Subject] = Field(default_factory=dict)
     requirements: dict[str, Requirement] = Field(default_factory=dict)
+    allocations: dict[str, Allocation] = Field(default_factory=dict)
     lessons: dict[str, Lesson] = Field(default_factory=dict)
     plans: dict[str, dict] = Field(default_factory=dict)
 

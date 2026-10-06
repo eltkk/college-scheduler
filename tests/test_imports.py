@@ -1,7 +1,7 @@
 from io import BytesIO
 import pytest
 from openpyxl import Workbook
-from app.imports import parse_kug, parse_load
+from app.imports import classify, parse_kug, parse_load
 from app.validation import RuleError
 
 
@@ -40,6 +40,10 @@ def test_invalid_or_uncached_hours_are_blockers(value):
 def test_non_excel_rejected():
     with pytest.raises(RuleError):
         parse_kug(b"bad archive", "test.xlsx")
+
+
+def test_consultation_before_exam_is_not_exam_hours():
+    assert classify("Русский язык (консультации к экзамену)") == "consultation"
 
 
 def test_load_uncached_formula_is_not_silently_dropped():
