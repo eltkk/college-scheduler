@@ -222,20 +222,26 @@ def validate(state: State):
                         raise RuleError(
                             "Недостаточно времени для перехода между корпусами"
                         )
-    for room in state.rooms.values():
-        room_lessons = [x for x in lessons if x.room_id == room.id]
-        for a in room_lessons:
-            concurrent = [
-                b for b in room_lessons if b.day == a.day and b.start <= a.start < b.end
-            ]
-            if len(concurrent) > room.parallel_capacity:
-                raise RuleError(f"Пересечение помещения «{room.name}»: {a.day}")
-            leaves = set().union(*(participants[b.id] for b in concurrent))
-            counts = [state.groups[g].student_count for g in leaves]
-            if (
-                room.student_capacity
-                and sum(x for x in counts if x is not None) > room.student_capacity
-            ):
+    by_room_day = defaultdict(list)
+    for lesson in lessons:
+        by_room_day[lesson.room_id, lesson.day].append(lesson)
+    for (rid, day), room_lessons in by_room_day.items():
+        room = state.rooms[rid]
+        events = sorted(
+            [(l.start, 1, l.id) for l in room_lessons]
+            + [(l.end, 0, l.id) for l in room_lessons]
+        )
+        active = set()
+        for _, begin, lid in events:
+            if not begin:
+                active.discard(lid)
+                continue
+            active.add(lid)
+            if len(active) > room.parallel_capacity:
+                raise RuleError(f"Пересечение помещения «{room.name}»: {day}")
+            leaves = set().union(*(participants[k] for k in active))
+            known = sum(state.groups[g].student_count or 0 for g in leaves)
+            if room.student_capacity and known > room.student_capacity:
                 raise RuleError(f"Помещение «{room.name}» не вмещает участников")
 
 

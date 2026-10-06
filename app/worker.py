@@ -33,6 +33,7 @@ def run_once():
                 "message": "Рабочий процесс остановился. Запустите расчёт повторно",
                 "lessons": [],
             }
+            job.source = {}
         job = db.scalar(
             select(GenerationJob)
             .where(GenerationJob.status == "queued")
@@ -81,6 +82,8 @@ def run_once():
     with SessionLocal() as db:
         job = db.get(GenerationJob, job_id)
         job.result = result
+        # Only queued/running calculations need their full source snapshot.
+        job.source = {}
         job.status = status
         job.finished = now()
         db.commit()

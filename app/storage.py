@@ -1,4 +1,5 @@
-from sqlalchemy import select
+from sqlalchemy import delete, select
+from .config import settings
 from .db import Workspace, Audit
 from .domain import State
 from .validation import RuleError, validate
@@ -36,6 +37,9 @@ def mutate(db, expected_version, user_id, action, operation):
     row.payload = state.model_dump(mode="json")
     db.add(
         Audit(version=row.version, user_id=user_id, action=action, snapshot=row.payload)
+    )
+    db.execute(
+        delete(Audit).where(Audit.version < row.version - settings.history_versions + 1)
     )
     db.commit()
     return row.version, result

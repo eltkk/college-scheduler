@@ -43,7 +43,11 @@ docker compose exec web python -m app.cli password --login editor1
 Для отдельного пустого тестового размещения можно заполнить учебный пример **до** инициализации рабочего состояния:
 
 ```sh
+docker compose build
+docker compose up -d --wait db
+docker compose run --rm --no-deps web alembic upgrade head
 docker compose run --rm --no-deps web python -m app.cli init --demo
+docker compose -f compose.yaml -f compose.local.yaml up -d
 ```
 
 Команда не заменяет уже существующие данные. Пример не содержит данных колледжа.

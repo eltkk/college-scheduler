@@ -273,3 +273,43 @@ def test_simultaneous_editors_cannot_commit_same_revision(client):
         row = db.get(Workspace, 1)
         assert row.version == 1
         assert sum(k.startswith("new") for k in row.payload["teachers"]) == 1
+
+
+def test_history_retention_keeps_current_and_does_not_change_live_data(
+    client, monkeypatch
+):
+    from app.config import settings
+    from app.db import Audit
+    from sqlalchemy import select
+
+    monkeypatch.setattr(settings, "history_versions", 20)
+    with SessionLocal() as db:
+        raw = db.get(Workspace, 1).payload
+        for version in range(1, 20):
+            db.add(
+                Audit(
+                    version=version,
+                    user_id="system",
+                    action="Old test version",
+                    snapshot=raw,
+                )
+            )
+        db.get(Workspace, 1).version = 19
+        db.commit()
+    assert (
+        client.put(
+            "/api/catalog/teachers/extra",
+            json={"version": 19, "item": {"name": "Teacher"}},
+        ).status_code
+        == 200
+    )
+    history = client.get("/api/history").json()
+    assert (
+        len(history) == 20
+        and history[0]["version"] == 20
+        and history[-1]["version"] == 1
+    )
+    assert (
+        client.post("/api/history/0/restore", json={"version": 20}).status_code == 404
+    )
+    assert "extra" in client.get("/api/state").json()["state"]["teachers"]

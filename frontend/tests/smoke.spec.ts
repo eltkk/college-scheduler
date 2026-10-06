@@ -92,6 +92,26 @@ test("login, generation, conflicts, catalogs, export and history", async ({
   await expect(
     page.getByText("Выберите файл Excel", { exact: true }),
   ).toBeVisible();
+  if (process.env.E2E_KUG_FILE) {
+    await page
+      .locator('input[type="file"]')
+      .setInputFiles(process.env.E2E_KUG_FILE);
+    await expect(
+      page.getByRole("dialog", { name: "Проверка КУГ" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("dialog").getByLabel("Лист / курс"),
+    ).toBeVisible();
+    await expect(
+      page
+        .getByRole("dialog")
+        .getByText("Сопоставление занятий", { exact: true }),
+    ).toBeVisible();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Отмена", exact: true })
+      .click();
+  }
   await page.getByRole("button", { name: "История", exact: true }).click();
   await expect(
     page.getByText("Сохранённые версии", { exact: true }),

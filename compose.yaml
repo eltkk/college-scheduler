@@ -11,6 +11,7 @@ x-app: &app
     DATA_DIR: /app/data
     SOLVER_SECONDS: ${SOLVER_SECONDS:-30}
     SOLVER_WORKERS: ${SOLVER_WORKERS:-2}
+    HISTORY_VERSIONS: ${HISTORY_VERSIONS:-200}
   volumes:
     - uploads:/app/data
   init: true
@@ -25,7 +26,7 @@ services:
     volumes:
       - postgres:/var/lib/postgresql/data
     healthcheck:
-      test: [CMD-SHELL, 'pg_isready -U scheduler -d scheduler']
+      test: [CMD-SHELL, "pg_isready -U scheduler -d scheduler"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -38,7 +39,13 @@ services:
     # Coolify routes HTTPS to port 8000. No public DB or web port required.
     expose: ["8000"]
     healthcheck:
-      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health',timeout=4)"]
+      test:
+        [
+          CMD,
+          python,
+          -c,
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health',timeout=4)",
+        ]
       interval: 15s
       timeout: 5s
       start_period: 90s

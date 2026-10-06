@@ -626,9 +626,11 @@ function Login({
 function WeekControl({
   week,
   onChange,
+  endDay = 4,
 }: {
   week: string;
   onChange: (v: string) => void;
+  endDay?: number;
 }) {
   return (
     <div className="week-control">
@@ -641,7 +643,7 @@ function WeekControl({
       </button>
       <span>
         <CalendarDays size={17} />
-        {dateLabel(week)} – {dateLabel(shift(week, 4))}
+        {dateLabel(week)} – {dateLabel(shift(week, endDay))}
       </span>
       <button
         className="icon-button"
@@ -758,7 +760,11 @@ function Schedule({
       </div>
       <div className="panel schedule-panel">
         <div className="toolbar">
-          <WeekControl week={week} onChange={setWeek} />
+          <WeekControl
+            week={week}
+            onChange={setWeek}
+            endDay={Math.max(...state.settings.study_days)}
+          />
           <div className="actions">
             <Button onClick={() => open({})}>
               <Plus size={16} />
@@ -1050,7 +1056,16 @@ function Schedule({
               <tbody>
                 {check.hours.map((r: Item) => (
                   <tr key={r.id}>
-                    <td>{r.subject}</td>
+                    <td>
+                      {r.subject}
+                      <small>
+                        {names(
+                          state.groups,
+                          state.requirements[r.id]?.group_ids ?? [],
+                        )}{" "}
+                        · {labels[state.requirements[r.id]?.kind]}
+                      </small>
+                    </td>
                     <td>{r.hours}</td>
                     <td>{r.scheduled}</td>
                     <td>
@@ -1568,7 +1583,11 @@ function Load({
   return (
     <div className="panel">
       <div className="toolbar">
-        <WeekControl week={week} onChange={setWeek} />
+        <WeekControl
+          week={week}
+          onChange={setWeek}
+          endDay={Math.max(...state.settings.study_days)}
+        />
         <Button
           className="primary"
           onClick={() => {

@@ -282,7 +282,9 @@ def check(week: date | None = None, auth=Depends(identity), db=Depends(db_sessio
 
 @app.get("/api/history")
 def history(auth=Depends(identity), db=Depends(db_session)):
-    rows = db.scalars(select(Audit).order_by(Audit.version.desc()).limit(60)).all()
+    rows = db.scalars(
+        select(Audit).order_by(Audit.version.desc()).limit(settings.history_versions)
+    ).all()
     names = {u.id: u.name for u in db.scalars(select(User))}
     return [
         {
