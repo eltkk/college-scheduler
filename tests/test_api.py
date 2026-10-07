@@ -149,7 +149,8 @@ def test_kug_preview_duplicate_confirm_and_no_silent_hour_loss(client):
                 "teacher_ids": ["t1"],
                 "room_ids": ["r1"],
                 "kind": "theory",
-            }
+            },
+            {"row_key": "5", "teacher_ids": ["t1"], "kind": "self_study"},
         ],
     }
     assert (
@@ -160,7 +161,8 @@ def test_kug_preview_duplicate_confirm_and_no_silent_hour_loss(client):
     )
     state = client.get("/api/state").json()["state"]
     imported = [r for r in state["requirements"].values() if r["source_ref"]]
-    assert len(imported) == 1 and imported[0]["hours"] == 4
+    assert len(imported) == 2
+    assert {r["kind"]: r["hours"] for r in imported} == {"theory": 4, "self_study": 2}
     assert len(next(iter(state["plans"].values()))["rows"]) == 2
     assert (
         client.post(

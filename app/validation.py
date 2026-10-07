@@ -1,6 +1,6 @@
 from collections import defaultdict
 from datetime import timedelta
-from .domain import State, Lesson
+from .domain import State, Lesson, bell_spans
 
 
 class RuleError(ValueError):
@@ -53,6 +53,18 @@ def overlap(a: Lesson, b: Lesson):
     return a.day == b.day and a.start < b.end and b.start < a.end
 
 
+def occupied_teachers(lesson):
+    return lesson.teacher_ids if lesson.teacher_presence else []
+
+
+def weekly_target(state, week):
+    return (
+        None
+        if week in state.settings.target_exempt_weeks
+        else state.settings.target_week_hours
+    )
+
+
 def valid_references(state: State):
     for name in [
         "teachers",
@@ -92,7 +104,7 @@ def valid_references(state: State):
             rooms = (
                 item.room_ids
                 if kind == "нагрузке"
-                else [item.room_id] if kind == "занятии" else []
+                else [item.room_id] if kind == "занятии" and item.room_id else []
             )
             if len(set(rooms)) != len(rooms) or any(
                 x not in state.rooms for x in rooms
@@ -127,6 +139,7 @@ def validate_allocations(state):
             or set(req.group_ids) != set(a.group_ids)
             or set(req.teacher_ids) != set(a.teacher_ids)
             or req.teacher_mode != a.teacher_mode
+            or req.teacher_presence != a.teacher_presence
         ):
             raise RuleError(
                 "Недельные назначения должны соответствовать семестровой нагрузке"
@@ -160,11 +173,9 @@ def validate(state: State):
                 f"«{subject}»: длительность меньше {lesson.hours} академических часов"
             )
         taught_minutes = sum(
-            min(
-                max(0, min(lesson.end, b.end) - max(lesson.start, b.start)),
-                b.hours * state.settings.academic_minutes,
-            )
+            max(0, min(lesson.end, end) - max(lesson.start, start))
             for b in state.settings.bells
+            for start, end in bell_spans(state.settings, b)
         )
         if taught_minutes < lesson.hours * state.settings.academic_minutes:
             raise RuleError(
@@ -181,15 +192,15 @@ def validate(state: State):
             if (
                 req.subject_id != lesson.subject_id
                 or req.kind != lesson.kind
+                or req.teacher_presence != lesson.teacher_presence
                 or set(req.group_ids) != set(lesson.group_ids)
             ):
                 raise RuleError(
                     "Предмет, вид и состав занятия должны соответствовать выбранной нагрузке"
                 )
-            if (
-                not set(lesson.teacher_ids) <= set(req.teacher_ids)
-                or lesson.room_id not in req.room_ids
-            ):
+            if not set(lesson.teacher_ids) <= set(
+                req.teacher_ids
+            ) or lesson.room_id not in (req.room_ids or [None]):
                 raise RuleError(
                     "Преподаватель или помещение не разрешены для этой нагрузки"
                 )
@@ -213,9 +224,12 @@ def validate(state: State):
         families = group_family(state, lesson.group_ids) | group_family(
             state, list(participants[lesson.id])
         )
-        resources = [("teacher", x, state.teachers[x]) for x in lesson.teacher_ids]
+        resources = [
+            ("teacher", x, state.teachers[x]) for x in occupied_teachers(lesson)
+        ]
         resources += [("group", x, state.groups[x]) for x in families]
-        resources.append(("room", lesson.room_id, state.rooms[lesson.room_id]))
+        if lesson.room_id:
+            resources.append(("room", lesson.room_id, state.rooms[lesson.room_id]))
         monday = lesson.day - timedelta(days=lesson.day.weekday())
         for kind, rid, resource in resources:
             if not available(resource, lesson.day, lesson.start, lesson.end):
@@ -241,6 +255,20 @@ def validate(state: State):
         for gid in participants[lesson.id]:
             daily["leaf", gid, lesson.day] += lesson.hours
             weekly["leaf", gid, monday] += lesson.hours
+            if (
+                state.settings.max_group_day_hours
+                and daily["leaf", gid, lesson.day] > state.settings.max_group_day_hours
+            ):
+                raise RuleError(
+                    f"«{state.groups[gid].name}»: превышен дневной предел колледжа"
+                )
+            if (
+                state.settings.max_group_week_hours
+                and weekly["leaf", gid, monday] > state.settings.max_group_week_hours
+            ):
+                raise RuleError(
+                    f"«{state.groups[gid].name}»: превышен недельный предел колледжа"
+                )
             for ancestor in group_family(state, [gid]):
                 group = state.groups[ancestor]
                 if (
@@ -259,7 +287,7 @@ def validate(state: State):
     for day_lessons in by_day.values():
         for i, a in enumerate(day_lessons):
             for b in day_lessons[i + 1 :]:
-                shared_teachers = set(a.teacher_ids) & set(b.teacher_ids)
+                shared_teachers = set(occupied_teachers(a)) & set(occupied_teachers(b))
                 shared_groups = participants[a.id] & participants[b.id]
                 if overlap(a, b):
                     if shared_teachers:
@@ -273,8 +301,8 @@ def validate(state: State):
                 elif a.day == b.day and (shared_teachers or shared_groups):
                     earlier, later = (a, b) if a.start <= b.start else (b, a)
                     buildings = (
-                        state.rooms[a.room_id].building,
-                        state.rooms[b.room_id].building,
+                        state.rooms[a.room_id].building if a.room_id else "",
+                        state.rooms[b.room_id].building if b.room_id else "",
                     )
                     if (
                         buildings[0]
@@ -288,7 +316,8 @@ def validate(state: State):
                         )
     by_room_day = defaultdict(list)
     for lesson in lessons:
-        by_room_day[lesson.room_id, lesson.day].append(lesson)
+        if lesson.room_id:
+            by_room_day[lesson.room_id, lesson.day].append(lesson)
     for (rid, day), room_lessons in by_room_day.items():
         room = state.rooms[rid]
         events = sorted(
@@ -366,10 +395,53 @@ def report(state: State, week=None):
         warnings.append(
             "Есть недельные строки без связи с соответствующей семестровой нагрузкой. Свяжите их для контроля семестровых часов"
         )
+    group_hours = []
+    weeks = {r.week for r in state.requirements.values()}
+    weeks.update(
+        l.day - timedelta(days=l.day.weekday()) for l in state.lessons.values()
+    )
+    if week is not None:
+        weeks = {week}
+    for monday in sorted(weeks):
+        planned = defaultdict(int)
+        actual = defaultdict(int)
+        for req in state.requirements.values():
+            if req.week == monday:
+                for gid in leaf_groups(state, req.group_ids):
+                    planned[gid] += req.hours
+        for lesson in state.lessons.values():
+            if monday <= lesson.day < monday + timedelta(days=7):
+                for gid in leaf_groups(state, lesson.group_ids):
+                    actual[gid] += lesson.hours
+        for gid in sorted(planned.keys() | actual.keys()):
+            target = weekly_target(state, monday)
+            group_hours.append(
+                {
+                    "group_id": gid,
+                    "group": state.groups[gid].name,
+                    "week": monday.isoformat(),
+                    "planned": planned[gid],
+                    "scheduled": actual[gid],
+                    "target": target,
+                }
+            )
+            if target and actual[gid] != target:
+                warnings.append(
+                    f"«{state.groups[gid].name}», {monday}: размещено {actual[gid]} ч., норматив {target} ч. с учётом самостоятельной работы"
+                )
+    if any(
+        r.kind in state.settings.manual_kinds and totals[r.id] < r.hours
+        for r in state.requirements.values()
+        if week is None or r.week == week
+    ):
+        warnings.append(
+            "Консультации и аттестацию разместите отдельно вручную: они не входят в автоматический расчёт"
+        )
     return {
         "errors": errors,
         "warnings": warnings,
         "hours": rows,
+        "group_hours": group_hours,
         "complete": bool(rows)
         and not errors
         and not warnings

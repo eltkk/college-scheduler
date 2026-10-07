@@ -10,6 +10,8 @@ from .validation import (
     group_family,
     overlap,
     validate,
+    occupied_teachers,
+    weekly_target,
 )
 
 
@@ -21,7 +23,9 @@ def periods(state, day, hours):
             remaining = hours
             for j, last in enumerate(bells[i:], i):
                 begin = last.start + (
-                    offset * state.settings.academic_minutes if j == i else 0
+                    offset * (state.settings.academic_minutes + last.break_minutes)
+                    if j == i
+                    else 0
                 )
                 capacity = last.hours - (offset if j == i else 0)
                 consumed = min(remaining, capacity)
@@ -30,9 +34,13 @@ def periods(state, day, hours):
                     end = (
                         last.end
                         if consumed == capacity
-                        else begin + consumed * state.settings.academic_minutes
+                        else begin
+                        + consumed * state.settings.academic_minutes
+                        + (consumed - 1) * last.break_minutes
                     )
-                    yield first.start + offset * state.settings.academic_minutes, end
+                    yield first.start + offset * (
+                        state.settings.academic_minutes + first.break_minutes
+                    ), end
                     break
 
 
@@ -49,6 +57,7 @@ def generate(state: State, week: date, group_ids: list[str]):
         r
         for r in state.requirements.values()
         if r.week == week
+        and r.kind not in state.settings.manual_kinds
         and (not group_ids or leaf_groups(state, r.group_ids) <= selected)
     ]
     if not reqs:
@@ -59,6 +68,37 @@ def generate(state: State, week: date, group_ids: list[str]):
         for l in state.lessons.values()
         if l.requirement_id not in selected_ids or l.locked
     ]
+    target = weekly_target(state, week)
+    if target:
+        projected = defaultdict(int)
+        for req in reqs:
+            remaining = req.hours - sum(
+                l.hours for l in fixed if l.requirement_id == req.id
+            )
+            for gid in leaf_groups(state, req.group_ids):
+                projected[gid] += remaining
+        for lesson in fixed:
+            if week <= lesson.day < week + timedelta(days=7):
+                for gid in leaf_groups(state, lesson.group_ids):
+                    projected[gid] += lesson.hours
+        target_groups = (
+            leaf_groups(state, group_ids)
+            if group_ids
+            else set().union(*(leaf_groups(state, r.group_ids) for r in reqs))
+        )
+        wrong = [
+            f"{state.groups[g].name}: {projected[g]} вместо {target} ч."
+            for g in sorted(target_groups)
+            if projected[g] != target
+        ]
+        if wrong:
+            return {
+                "status": "infeasible",
+                "message": "Не соблюдён недельный норматив с учётом С/Р. Исправьте нагрузку или разместите ручные консультации/аттестацию: "
+                + "; ".join(wrong),
+                "lessons": [],
+                "selected_requirement_ids": list(selected_ids),
+            }
     variables = []
     chunks = []
     model = cp_model.CpModel()
@@ -79,15 +119,17 @@ def generate(state: State, week: date, group_ids: list[str]):
         start = (lesson.day - week).days * 1440 + lesson.start
         end = (lesson.day - week).days * 1440 + lesson.end
         interval = model.new_interval_var(start, end - start, end, f"fixed{lesson.id}")
-        for teacher in lesson.teacher_ids:
+        for teacher in occupied_teachers(lesson):
             teacher_intervals[teacher].append(interval)
         for gid in leaf_groups(state, lesson.group_ids):
             group_intervals[gid].append(interval)
-        room_intervals[lesson.room_id].append(interval)
+        if lesson.room_id:
+            room_intervals[lesson.room_id].append(interval)
         sizes = [
             state.groups[g].student_count for g in leaf_groups(state, lesson.group_ids)
         ]
-        room_demands[lesson.room_id].append(sum(x for x in sizes if x is not None))
+        if lesson.room_id:
+            room_demands[lesson.room_id].append(sum(x for x in sizes if x is not None))
     objective = []
     for req in reqs:
         previous_positions = {}
@@ -114,12 +156,13 @@ def generate(state: State, week: date, group_ids: list[str]):
                         else [[t] for t in req.teacher_ids]
                     )
                     for teachers in teacher_sets:
-                        for room in req.room_ids:
+                        for room in req.room_ids or [None]:
                             candidate = Lesson(
                                 requirement_id=req.id,
                                 subject_id=req.subject_id,
                                 group_ids=req.group_ids,
                                 teacher_ids=teachers,
+                                teacher_presence=req.teacher_presence,
                                 room_id=room,
                                 day=day,
                                 start=start,
@@ -132,8 +175,11 @@ def generate(state: State, week: date, group_ids: list[str]):
                                 state, list(participants)
                             ) | group_family(state, req.group_ids)
                             resources = (
-                                [state.teachers[t] for t in teachers]
-                                + [state.rooms[room]]
+                                [
+                                    state.teachers[t]
+                                    for t in occupied_teachers(candidate)
+                                ]
+                                + ([state.rooms[room]] if room else [])
                                 + [state.groups[g] for g in groups]
                             )
                             if not all(
@@ -147,6 +193,7 @@ def generate(state: State, week: date, group_ids: list[str]):
                             size = sum(x for x in sizes if x is not None)
                             if (
                                 size is not None
+                                and room is not None
                                 and state.rooms[room].student_capacity
                                 and size > state.rooms[room].student_capacity
                             ):
@@ -159,7 +206,7 @@ def generate(state: State, week: date, group_ids: list[str]):
                             variables.append((variable, candidate))
                             choices.append(variable)
                             objective.append(variable * (start // 10))
-                            for teacher in teachers:
+                            for teacher in occupied_teachers(candidate):
                                 teacher_day[teacher, day].append(variable * duration)
                                 teacher_week[teacher].append(variable * duration)
                             for gid in leaf_groups(state, req.group_ids):
@@ -174,12 +221,13 @@ def generate(state: State, week: date, group_ids: list[str]):
                                 variable,
                                 f"i{len(variables)}",
                             )
-                            for teacher in teachers:
+                            for teacher in occupied_teachers(candidate):
                                 teacher_intervals[teacher].append(interval)
                             for gid in participants:
                                 group_intervals[gid].append(interval)
-                            room_intervals[room].append(interval)
-                            room_demands[room].append(size)
+                            if room:
+                                room_intervals[room].append(interval)
+                                room_demands[room].append(size)
             if not choices:
                 return {
                     "status": "infeasible",
@@ -208,7 +256,7 @@ def generate(state: State, week: date, group_ids: list[str]):
         }
         candidates_by_resource = defaultdict(list)
         for v, l in variables:
-            for key in [("teacher", x, l.day) for x in l.teacher_ids] + [
+            for key in [("teacher", x, l.day) for x in occupied_teachers(l)] + [
                 ("group", x, l.day) for x in participant_cache[l.id]
             ]:
                 candidates_by_resource[key].append((v, l))
@@ -218,7 +266,7 @@ def generate(state: State, week: date, group_ids: list[str]):
                 for l in fixed
                 if l.day == key[2]
                 and (
-                    key[1] in l.teacher_ids
+                    key[1] in occupied_teachers(l)
                     if key[0] == "teacher"
                     else key[1] in leaf_groups(state, l.group_ids)
                 )
@@ -226,8 +274,8 @@ def generate(state: State, week: date, group_ids: list[str]):
             for i, (va, a) in enumerate(choices):
                 for vb, b in choices[i + 1 :] + [(None, l) for l in relevant_fixed]:
                     buildings = (
-                        state.rooms[a.room_id].building,
-                        state.rooms[b.room_id].building,
+                        state.rooms[a.room_id].building if a.room_id else "",
+                        state.rooms[b.room_id].building if b.room_id else "",
                     )
                     if (
                         all(buildings)
@@ -243,7 +291,9 @@ def generate(state: State, week: date, group_ids: list[str]):
                             )
     for (tid, day), terms in teacher_day.items():
         teacher = state.teachers[tid]
-        external = sum(l.hours for l in fixed if tid in l.teacher_ids and l.day == day)
+        external = sum(
+            l.hours for l in fixed if tid in occupied_teachers(l) and l.day == day
+        )
         if teacher.max_day_hours:
             model.add(sum(terms) + external <= teacher.max_day_hours)
     for tid, terms in teacher_week.items():
@@ -251,7 +301,7 @@ def generate(state: State, week: date, group_ids: list[str]):
         external = sum(
             l.hours
             for l in fixed
-            if tid in l.teacher_ids and week <= l.day < week + timedelta(days=7)
+            if tid in occupied_teachers(l) and week <= l.day < week + timedelta(days=7)
         )
         if teacher.max_week_hours:
             model.add(sum(terms) + external <= teacher.max_week_hours)
@@ -261,6 +311,8 @@ def generate(state: State, week: date, group_ids: list[str]):
             for x in group_family(state, [gid])
             if state.groups[x].max_day_hours
         ]
+        if state.settings.max_group_day_hours:
+            limits.append(state.settings.max_group_day_hours)
         external = sum(
             l.hours
             for l in fixed
@@ -268,12 +320,20 @@ def generate(state: State, week: date, group_ids: list[str]):
         )
         if limits:
             model.add(sum(terms) + external <= min(limits))
+        if state.settings.preferred_day_hours:
+            extra = model.new_int_var(0, 200, f"extra{gid}{day}")
+            model.add_max_equality(
+                extra, [0, sum(terms) + external - state.settings.preferred_day_hours]
+            )
+            objective.append(extra * 5000)
     for gid, terms in group_week.items():
         limits = [
             state.groups[x].max_week_hours
             for x in group_family(state, [gid])
             if state.groups[x].max_week_hours
         ]
+        if state.settings.max_group_week_hours:
+            limits.append(state.settings.max_group_week_hours)
         external = sum(
             l.hours
             for l in fixed
@@ -282,6 +342,38 @@ def generate(state: State, week: date, group_ids: list[str]):
         )
         if limits:
             model.add(sum(terms) + external <= min(limits))
+    if state.settings.avoid_group_gaps:
+        bell_choices = defaultdict(list)
+        fixed_bells = set()
+        bells = sorted(state.settings.bells, key=lambda b: b.start)
+        for variable, candidate in variables:
+            for gid in leaf_groups(state, candidate.group_ids):
+                for index, bell in enumerate(bells):
+                    if candidate.start < bell.end and bell.start < candidate.end:
+                        bell_choices[gid, candidate.day, index].append(variable)
+        for lesson in fixed:
+            if week <= lesson.day < week + timedelta(days=7):
+                for gid in leaf_groups(state, lesson.group_ids):
+                    for index, bell in enumerate(bells):
+                        if lesson.start < bell.end and bell.start < lesson.end:
+                            fixed_bells.add((gid, lesson.day, index))
+        for gid, day in group_day:
+            present = []
+            for index in range(len(bells)):
+                key = (gid, day, index)
+                flag = model.new_bool_var(f"bell{gid}{day}{index}")
+                model.add_max_equality(
+                    flag, [1] if key in fixed_bells else bell_choices[key] or [0]
+                )
+                present.append(flag)
+            for index in range(1, len(bells) - 1):
+                before = model.new_bool_var(f"before{gid}{day}{index}")
+                after = model.new_bool_var(f"after{gid}{day}{index}")
+                gap = model.new_bool_var(f"gap{gid}{day}{index}")
+                model.add_max_equality(before, present[:index])
+                model.add_max_equality(after, present[index + 1 :])
+                model.add(gap >= before + after - present[index] - 1)
+                objective.append(gap * 10000)
     model.minimize(sum(objective))
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = settings.solver_seconds

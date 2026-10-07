@@ -907,7 +907,7 @@ p {
 .bell-labels,
 .bell-row {
   display: grid;
-  grid-template-columns: 0.7fr 1fr 1fr 0.7fr 25px;
+  grid-template-columns: 0.6fr 1fr 1fr 0.6fr 0.8fr 25px;
   gap: 10px;
   margin-bottom: 9px;
 }

@@ -47,7 +47,7 @@ def load_template():
     for line in [
         "Пример во второй строке замените реальными данными.",
         "Неделя: дата понедельника. Часы: целые академические часы.",
-        "Вид: theory, practice, consultation, assessment, training, coursework.",
+        "Вид: theory, practice, consultation, assessment, training, coursework, self_study.",
         "Блок: длительность непрерывного занятия в академических часах.",
         "Несколько групп/преподавателей/помещений разделяйте точкой с запятой.",
         "Несколько преподавателей в строке: разрешённые альтернативы для автоматического назначения.",
@@ -131,9 +131,19 @@ def export_schedule(state, week, group_ids=None):
                         teachers = ", ".join(
                             state.teachers[t].name for t in l.teacher_ids
                         )
-                        room = state.rooms[l.room_id]
+                        room = state.rooms.get(l.room_id)
+                        place = (
+                            f"{room.name}{' · '+room.building if room.building else ''}"
+                            if room
+                            else "Без кабинета"
+                        )
+                        presence = (
+                            " · ответственный, без присутствия"
+                            if not l.teacher_presence
+                            else ""
+                        )
                         texts.append(
-                            f"{state.subjects[l.subject_id].name}\n{KIND_LABELS[l.kind]} · {teachers}\n{room.name}{' · '+room.building if room.building else ''}{'\n'+l.note if l.note else ''}"
+                            f"{state.subjects[l.subject_id].name}\n{KIND_LABELS[l.kind]} · {teachers}{presence}\n{place}{'\n'+l.note if l.note else ''}"
                         )
                     sheet.cell(row, c, safe("\n\n".join(texts)))
                     lookup[row, c] = tuple(l.id for l in relevant)

@@ -65,12 +65,30 @@ class Subject(Named):
 
 
 LessonKind = Literal[
-    "theory", "practice", "consultation", "assessment", "training", "coursework"
+    "theory",
+    "practice",
+    "consultation",
+    "assessment",
+    "training",
+    "coursework",
+    "self_study",
 ]
 TeacherMode = Literal["alternative", "together"]
 
 
-class Allocation(Model):
+class Teaching(Model):
+    teacher_presence: bool = True
+
+    @model_validator(mode="after")
+    def attendance(self):
+        if not self.teacher_presence and self.kind != "self_study":
+            raise ValueError(
+                "Отсутствие преподавателя допустимо только для самостоятельной работы"
+            )
+        return self
+
+
+class Allocation(Teaching):
     """Confirmed period workload. It never becomes weekly hours by itself."""
 
     id: str = Field(default_factory=uid, min_length=1, max_length=64)
@@ -96,14 +114,14 @@ class Allocation(Model):
         return self
 
 
-class Requirement(Model):
+class Requirement(Teaching):
     id: str = Field(default_factory=uid, min_length=1, max_length=64)
     subject_id: str
     group_ids: list[str] = Field(min_length=1)
     teacher_ids: list[str] = Field(min_length=1)
     teacher_mode: TeacherMode = "alternative"
     allocation_id: str | None = None
-    room_ids: list[str] = Field(min_length=1)
+    room_ids: list[str] = Field(default_factory=list)
     week: date
     kind: LessonKind = "theory"
     hours: int = Field(ge=1, le=200)
@@ -114,16 +132,18 @@ class Requirement(Model):
     def monday(self):
         if self.week.weekday() != 0:
             raise ValueError("Неделя должна начинаться с понедельника")
+        if not self.room_ids and self.kind != "self_study":
+            raise ValueError("Укажите разрешённые помещения для занятия")
         return self
 
 
-class Lesson(Model):
+class Lesson(Teaching):
     id: str = Field(default_factory=uid, min_length=1, max_length=64)
     requirement_id: str | None = None
     subject_id: str
     group_ids: list[str] = Field(min_length=1)
     teacher_ids: list[str] = Field(min_length=1)
-    room_id: str
+    room_id: str | None = None
     day: date
     start: int = Field(ge=0, le=1439)
     end: int = Field(ge=1, le=1440)
@@ -136,6 +156,8 @@ class Lesson(Model):
     def interval(self):
         if self.start >= self.end:
             raise ValueError("Начало занятия должно быть раньше окончания")
+        if not self.room_id and self.kind != "self_study":
+            raise ValueError("Укажите помещение для занятия")
         return self
 
 
@@ -144,6 +166,14 @@ class Bell(Model):
     start: int = Field(ge=0, le=1439)
     end: int = Field(ge=1, le=1440)
     hours: int = Field(default=2, ge=1, le=8)
+    break_minutes: int = Field(default=0, ge=0, le=30)
+
+
+def bell_spans(settings, bell):
+    """Teaching minutes only; the internal break never closes plan hours."""
+    for hour in range(bell.hours):
+        start = bell.start + hour * (settings.academic_minutes + bell.break_minutes)
+        yield start, start + settings.academic_minutes
 
 
 class CollegeSettings(Model):
@@ -159,6 +189,13 @@ class CollegeSettings(Model):
         ]
     )
     transition_minutes: int = Field(default=0, ge=0, le=180)
+    max_group_day_hours: int | None = Field(default=None, ge=1, le=24)
+    max_group_week_hours: int | None = Field(default=None, ge=1, le=168)
+    target_week_hours: int | None = Field(default=None, ge=1, le=168)
+    target_exempt_weeks: list[date] = Field(default_factory=list)
+    preferred_day_hours: int | None = Field(default=None, ge=1, le=24)
+    avoid_group_gaps: bool = False
+    manual_kinds: list[LessonKind] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def calendar(self):
@@ -172,14 +209,55 @@ class CollegeSettings(Model):
         for i, bell in enumerate(ordered):
             if (
                 bell.start >= bell.end
-                or bell.end - bell.start < bell.hours * self.academic_minutes
+                or bell.end - bell.start
+                < bell.hours * self.academic_minutes
+                + (bell.hours - 1) * bell.break_minutes
             ):
                 raise ValueError(
                     "Время пары меньше указанного числа академических часов"
                 )
             if i and ordered[i - 1].end > bell.start:
                 raise ValueError("Пары не должны пересекаться")
+        if any(w.weekday() != 0 for w in self.target_exempt_weeks):
+            raise ValueError(
+                "Исключения недельного норматива задаются датами понедельников"
+            )
+        if len(set(self.manual_kinds)) != len(self.manual_kinds):
+            raise ValueError("Виды ручного составления не должны повторяться")
+        if (
+            self.target_week_hours
+            and self.max_group_week_hours
+            and self.target_week_hours > self.max_group_week_hours
+        ):
+            raise ValueError("Недельный норматив превышает предельную нагрузку")
         return self
+
+
+def college_profile():
+    """Rules confirmed by the customer on 6-7 October 2026; applied explicitly."""
+    return CollegeSettings(
+        confirmed=False,
+        academic_minutes=45,
+        study_days=[0, 1, 2, 3, 4],
+        bells=[
+            Bell(number=i + 1, start=start, end=end, hours=2, break_minutes=5)
+            for i, (start, end) in enumerate(
+                [
+                    (510, 605),
+                    (635, 730),
+                    (760, 855),
+                    (885, 980),
+                    (990, 1085),
+                ]
+            )
+        ],
+        max_group_day_hours=10,
+        max_group_week_hours=36,
+        target_week_hours=36,
+        preferred_day_hours=8,
+        avoid_group_gaps=True,
+        manual_kinds=["consultation", "assessment"],
+    )
 
 
 class State(Model):
@@ -208,4 +286,5 @@ KIND_LABELS = {
     "assessment": "Аттестация",
     "training": "Практика УП/ПП",
     "coursework": "Курсовая работа",
+    "self_study": "Самостоятельная работа",
 }

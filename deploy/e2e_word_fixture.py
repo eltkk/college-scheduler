@@ -1,4 +1,5 @@
 """Create an anonymous DOCX for browser checks; no college source data."""
+
 from pathlib import Path
 from zipfile import ZipFile
 import xml.etree.ElementTree as ET
@@ -17,8 +18,9 @@ def create(path):
     paragraph(body, "I семестр, учебный пример для проверки")
     table = ET.SubElement(body, W + "tbl")
     for values in [
-        ["", "Дисциплина", "теория", "практика"],
-        ["", "Раздел для проверки Word", "4\n1-9ЛД126 Тестова А.Б.", ""],
+        ["", "Дисциплина", "теория", "практика", "Сам.р"],
+        ["", "Раздел для проверки Word", "4\n1-9ЛД126 Тестова А.Б.", "", ""],
+        ["", "С/Р для проверки Word", "", "", "4\n1-9ЛД126 Тестова А.Б."],
     ]:
         tr = ET.SubElement(table, W + "tr")
         for value in values:

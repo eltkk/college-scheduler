@@ -25,6 +25,7 @@ from .domain import (
     Teacher,
     Group,
     uid,
+    college_profile,
 )
 from .export import export_schedule, load_template
 from .imports import parse_kug, parse_load
@@ -205,6 +206,11 @@ def edit_settings(body: Change, auth=Depends(identity), db=Depends(db_session)):
     return {"version": v}
 
 
+@app.get("/api/settings/college-profile")
+def settings_profile(auth=Depends(identity)):
+    return college_profile().model_dump(mode="json")
+
+
 @app.put("/api/requirements/{item_id}")
 def requirement(
     item_id: str, body: Change, auth=Depends(identity), db=Depends(db_session)
@@ -235,7 +241,7 @@ def delete_requirement(
 
 @app.put("/api/lessons/{item_id}")
 def lesson(item_id: str, body: Change, auth=Depends(identity), db=Depends(db_session)):
-    parsed = Lesson.model_validate({**body.item, "id": item_id})
+    parsed = Lesson.model_validate({"locked": True, **body.item, "id": item_id})
     v, _ = mutate(
         db,
         body.version,
@@ -268,10 +274,22 @@ def swap(body: Change, auth=Depends(identity), db=Depends(db_session)):
             raise RuleError("Выберите два разных занятия")
         # Validate complete replacements, avoiding transient invalid start/end values.
         s.lessons[a.id] = Lesson.model_validate(
-            {**a.model_dump(), "day": b.day, "start": b.start, "end": b.end}
+            {
+                **a.model_dump(),
+                "day": b.day,
+                "start": b.start,
+                "end": b.end,
+                "locked": True,
+            }
         )
         s.lessons[b.id] = Lesson.model_validate(
-            {**b.model_dump(), "day": a.day, "start": a.start, "end": a.end}
+            {
+                **b.model_dump(),
+                "day": a.day,
+                "start": a.start,
+                "end": a.end,
+                "locked": True,
+            }
         )
 
     v, _ = mutate(db, body.version, auth[0].id, "Обмен занятий", change)
@@ -411,10 +429,10 @@ def confirm_kug(
     rows = [r for r in sheet["rows"] if r["hours"].get(item["week_key"], 0)]
     if not rows:
         raise RuleError("В выбранном столбце нет часов")
-    expected = {r["key"] for r in rows if r["kind"] != "self_study"}
+    expected = {r["key"] for r in rows}
     if set(selected) != expected:
         raise RuleError(
-            "Нужно сопоставить каждую строку выбранной недели, кроме самостоятельной работы"
+            "Нужно сопоставить каждую строку выбранной недели, включая самостоятельную работу"
         )
 
     def change(s):
@@ -427,8 +445,6 @@ def confirm_kug(
             if g not in s.groups:
                 raise RuleError("Группа не найдена")
         for row in rows:
-            if row["kind"] == "self_study":
-                continue
             mapping = selected[row["key"]]
             kind = mapping.get("kind", row["kind"])
             allocated = mapping.get("allocations", [])
@@ -468,6 +484,7 @@ def confirm_kug(
                             group_ids=a.group_ids,
                             teacher_ids=a.teacher_ids,
                             teacher_mode=a.teacher_mode,
+                            teacher_presence=a.teacher_presence,
                             allocation_id=a.id,
                             hours=hours,
                         )
@@ -493,9 +510,7 @@ def confirm_kug(
                     s.subjects[subject.id] = subject
                     subject_id = subject.id
                 participants = (
-                    [groups]
-                    if kind == "theory" or mapping.get("joint")
-                    else [[g] for g in groups]
+                    [groups] if mapping.get("joint") else [[g] for g in groups]
                 )
                 definitions = [
                     dict(
@@ -503,6 +518,7 @@ def confirm_kug(
                         group_ids=gs,
                         teacher_ids=mapping.get("teacher_ids", []),
                         teacher_mode=mapping.get("teacher_mode", "alternative"),
+                        teacher_presence=mapping.get("teacher_presence", True),
                         hours=row["hours"][item["week_key"]],
                     )
                     for gs in participants
@@ -565,15 +581,21 @@ def put_allocation(
             }
             for rid in linked:
                 r = s.requirements[rid]
-                for key in (
-                    "subject_id",
-                    "group_ids",
-                    "teacher_ids",
-                    "teacher_mode",
-                    "kind",
-                ):
-                    setattr(r, key, getattr(parsed, key))
-            for l in s.lessons.values():
+                updates = {
+                    key: getattr(parsed, key)
+                    for key in (
+                        "subject_id",
+                        "group_ids",
+                        "teacher_ids",
+                        "teacher_mode",
+                        "kind",
+                        "teacher_presence",
+                    )
+                }
+                s.requirements[rid] = Requirement.model_validate(
+                    {**r.model_dump(), **updates}
+                )
+            for l in list(s.lessons.values()):
                 if l.requirement_id not in linked:
                     continue
                 if parsed.teacher_mode == "together":
@@ -584,8 +606,11 @@ def put_allocation(
                     raise RuleError(
                         "Для замены в существующем занятии укажите единственного преподавателя или сохраните его текущего преподавателя в списке"
                     )
-                for key in ("subject_id", "group_ids", "kind"):
-                    setattr(l, key, getattr(parsed, key))
+                updates = {
+                    key: getattr(parsed, key)
+                    for key in ("subject_id", "group_ids", "kind", "teacher_presence")
+                }
+                s.lessons[l.id] = Lesson.model_validate({**l.model_dump(), **updates})
 
     v, _ = mutate(
         db, body.version, auth[0].id, "Изменение семестровой нагрузки", change
@@ -677,10 +702,6 @@ def confirm_term_load(
                 raise RuleError("Ячейка не найдена или выбрана повторно")
             seen.add(key)
             original = source[key]
-            if original["kind"] == "self_study":
-                raise RuleError(
-                    "Самостоятельную работу нельзя превращать в занятия расписания"
-                )
             if (
                 original["hours"] is None
                 and len(str(reviewed.get("note", "")).strip()) < 5
@@ -737,6 +758,7 @@ def confirm_term_load(
                         group_ids=participants,
                         teacher_ids=teacher_ids,
                         teacher_mode=assignment.get("teacher_mode", "alternative"),
+                        teacher_presence=reviewed.get("teacher_presence", True),
                         kind=reviewed.get("kind", original["kind"]),
                         hours=reviewed.get("hours"),
                         start_date=item["start_date"],
@@ -836,12 +858,18 @@ def confirm_load(
                 "аттестация": "assessment",
                 "уп/пп": "training",
                 "курсовая": "coursework",
+                "самостоятельная работа": "self_study",
+                "с/р": "self_study",
             }.get(kind.casefold(), kind)
             req = Requirement(
                 subject_id=subject[0],
                 group_ids=resolve("group", s.groups),
                 teacher_ids=resolve("teacher", s.teachers),
-                room_ids=resolve("room", s.rooms),
+                room_ids=(
+                    []
+                    if kind == "self_study" and not str(value("room", "")).strip()
+                    else resolve("room", s.rooms)
+                ),
                 week=week,
                 hours=int(hours),
                 block_hours=int(block),
@@ -873,6 +901,7 @@ def confirm_load(
                 req.source_ref = matches[0].source_ref
                 req.allocation_id = matches[0].allocation_id
                 req.teacher_mode = matches[0].teacher_mode
+                req.teacher_presence = matches[0].teacher_presence
             s.requirements[req.id] = req
             count += 1
         return count

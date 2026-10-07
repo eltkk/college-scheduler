@@ -83,6 +83,7 @@ def suggestions(value):
     pending = []
     inherited = False
     for line in value.splitlines():
+        matches = list(GROUP.finditer(line))
         gs = list(
             dict.fromkeys(re.sub(r"\s+", "", m.group()) for m in GROUP.finditer(line))
         )
@@ -94,7 +95,17 @@ def suggestions(value):
         if gs:
             pending.extend(gs)
         if ts and pending:
-            assignments.append({"groups": list(dict.fromkeys(pending)), "teachers": ts})
+            joint = (
+                len(gs) > 1
+                and len(pending) == len(gs)
+                and all(
+                    re.fullmatch(r"\s*[-–—]\s*", line[a.end() : b.start()])
+                    for a, b in zip(matches, matches[1:])
+                )
+            )
+            assignments.append(
+                {"groups": list(dict.fromkeys(pending)), "teachers": ts, "joint": joint}
+            )
             inherited |= not gs or len(pending) != len(gs)
             pending = []
     return groups, teachers, assignments, pending, inherited

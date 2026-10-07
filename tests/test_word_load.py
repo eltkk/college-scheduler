@@ -69,8 +69,8 @@ def test_word_preserves_original_hours_and_separates_kinds():
     assert e[4]["hours"] is None  # multiplier is not per-group hours
     assert e[0]["hours"] == 14
     assert e[0]["assignments"] == [
-        {"groups": ["1-9ЛД126"], "teachers": ["Иванова А.Б."]},
-        {"groups": ["1-9ЛД226"], "teachers": ["Петрова В.Г."]},
+        {"groups": ["1-9ЛД126"], "teachers": ["Иванова А.Б."], "joint": False},
+        {"groups": ["1-9ЛД226"], "teachers": ["Петрова В.Г."], "joint": False},
     ]
     assert e[3]["warnings"]  # pending lines + trailing teacher need review
     assert len(parse_word_load(word_file(), "load.docx")["tables"][0]["rows"]) == 5
@@ -184,16 +184,22 @@ def test_invalid_cell_rolls_back_entire_batch_and_catalogs(client):
     )
 
 
-def test_self_study_cannot_be_imported_as_lesson_load(client):
+def test_self_study_import_preserves_full_hours_and_responsible_teacher(client):
     doc = upload(client)
     item = review()
     item["entries"][0]["key"] = entries()[2]["key"]
+    item["entries"][0]["kind"] = "self_study"
+    item["entries"][0]["hours"] = 26
     assert (
         client.post(
             f"/api/imports/{doc}/term-load", json={"version": 0, "item": item}
         ).status_code
-        == 422
+        == 200
     )
+    allocations = list(client.get("/api/state").json()["state"]["allocations"].values())
+    assert len(allocations) == 2
+    assert all(a["kind"] == "self_study" and a["hours"] == 26 for a in allocations)
+    assert len({tuple(a["teacher_ids"]) for a in allocations}) == 2
 
 
 def allocation(state, **changes):
@@ -285,7 +291,8 @@ def test_kug_uses_different_period_teachers_and_checks_per_group_coverage(client
                 "kind": "theory",
                 "room_ids": ["r1"],
                 "allocations": [{"allocation_id": "a1", "hours": 4}],
-            }
+            },
+            {"row_key": "5", "teacher_ids": ["t1"], "kind": "self_study"},
         ],
     }
     assert (
