@@ -1,7 +1,9 @@
 from collections import defaultdict
 from datetime import timedelta
 from io import BytesIO
+from math import ceil
 import re
+from textwrap import wrap
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -22,6 +24,35 @@ def bytes_for(book):
     buffer = BytesIO()
     book.save(buffer)
     return buffer.getvalue()
+
+
+def fit_text_rows(sheet, first_row, minimum):
+    """Estimate wrapped text after merging: Excel cannot auto-fit merged cells."""
+    merged = {
+        (area.min_row, area.min_col): area for area in sheet.merged_cells.ranges
+    }
+    for cells in sheet.iter_rows(min_row=first_row):
+        for cell in cells:
+            if cell.value in (None, ""):
+                continue
+            area = merged.get((cell.row, cell.column))
+            last_col = area.max_col if area else cell.column
+            last_row = area.max_row if area else cell.row
+            width = sum(
+                sheet.column_dimensions[get_column_letter(col)].width
+                for col in range(cell.column, last_col + 1)
+            )
+            # Leave slack for wide Cyrillic letters and renderer/font differences.
+            characters = max(1, int(width * 0.85))
+            lines = sum(
+                max(1, len(wrap(line, width=characters, break_on_hyphens=False)))
+                for line in str(cell.value).split("\n")
+            )
+            needed = ceil((lines * 16 + 12) / (last_row - cell.row + 1))
+            for row in range(cell.row, last_row + 1):
+                sheet.row_dimensions[row].height = min(
+                    409, max(minimum, sheet.row_dimensions[row].height or 0, needed)
+                )
 
 
 def load_template():
@@ -193,6 +224,7 @@ def export_schedule(state, week, group_ids=None):
         sheet.column_dimensions["B"].width = 17
         for col in range(3, last + 1):
             sheet.column_dimensions[get_column_letter(col)].width = 38
+        fit_text_rows(sheet, 3, 24)
         sheet.freeze_panes = "C4"
         sheet.print_title_rows = "1:3"
         sheet.print_options.horizontalCentered = True
@@ -221,4 +253,8 @@ def export_schedule(state, week, group_ids=None):
             )
     for col, width in enumerate([60, 35, 25, 15, 18, 15], 1):
         summary.column_dimensions[get_column_letter(col)].width = width
+    for cells in summary:
+        for cell in cells:
+            cell.alignment = Alignment(vertical="center", wrap_text=True)
+    fit_text_rows(summary, 1, 24)
     return bytes_for(book)

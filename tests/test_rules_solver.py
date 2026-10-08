@@ -232,6 +232,35 @@ def test_excel_preserves_shared_merges_hours_and_text_safety(state):
     assert book["Часы"]["F2"].value == 2
 
 
+@pytest.mark.parametrize("shared,continuous", [(False, False), (True, False), (False, True)])
+def test_excel_sizes_long_text_using_actual_merged_width_and_height(state, shared, continuous):
+    week = state.requirements["n1"].week
+    lesson = make_lesson(state)
+    lesson.group_ids = ["g1", "g2"] if shared else ["g1"]
+    if continuous:
+        lesson.end = state.settings.bells[1].end
+        lesson.hours = 4
+    long_name = "Организация доступной среды и социальная адаптация инвалидов " * 4
+    state.subjects["s1"].name = long_name
+    state.lessons = {lesson.id: lesson}
+    book = load_workbook(BytesIO(export_schedule(state, week)))
+    sheet = book.worksheets[0]
+    assert sheet["C4"].value.startswith(long_name)
+    assert sheet["C4"].alignment.wrap_text
+    if continuous:
+        assert "C4:C6" in {str(area) for area in sheet.merged_cells.ranges}
+        assert sum(sheet.row_dimensions[row].height for row in range(4, 7)) >= 276
+    elif shared:
+        assert "C4:D4" in {str(area) for area in sheet.merged_cells.ranges}
+        assert 92 <= sheet.row_dimensions[4].height < 150
+    else:
+        assert sheet.row_dimensions[4].height >= 150
+    summary = book["Часы"]
+    assert summary["A2"].value == long_name
+    assert summary["A2"].alignment.wrap_text
+    assert summary.row_dimensions[2].height > 24
+
+
 def test_break_time_cannot_count_as_academic_hours(state):
     state.settings.bells = [
         Bell(number=1, start=510, end=600, hours=2),
