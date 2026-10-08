@@ -28,9 +28,12 @@ def test_merged_week_is_summed_once_with_source_cells():
     assert sheet["rows"][0]["refs"]["C:D"] == ["C4", "D4"]
     assert sheet["rows"][1]["kind"] == "self_study"
     assert not sheet["errors"]
+    assert sheet["weeks"][0]["hours"] == 6
+    assert sheet["weeks"][0]["declared_hours"] == 6
+    assert not sheet["weeks"][0]["warnings"]
 
 
-@pytest.mark.parametrize("value", [1.5, -2, "=SUM(1,2)", "#VALUE!"])
+@pytest.mark.parametrize("value", [1.5, -2, True, False, "=SUM(1,2)", "#VALUE!"])
 def test_invalid_or_uncached_hours_are_blockers(value):
     sheet = parse_kug(kug_file(value), "test.xlsx")["sheets"][0]
     assert sheet["errors"][0]["cell"] == "C4"
@@ -60,3 +63,62 @@ def test_whitespace_is_an_empty_cell():
     sheet = parse_kug(kug_file(" "), "test.xlsx")["sheets"][0]
     assert not sheet["errors"]
     assert sheet["rows"][0]["hours"]["C:D"] == 1
+
+
+def test_kug_footer_mismatch_is_visible_without_rewriting_source_hours():
+    sheet = parse_kug(kug_file(1), "test.xlsx")["sheets"][0]
+    week = sheet["weeks"][0]
+    assert week["hours"] == 4 and week["declared_hours"] == 6
+    assert "не совпадает" in week["warnings"][0]
+    assert sheet["rows"][0]["hours"]["C:D"] == 2
+
+
+def test_term_total_under_week_heading_cannot_be_confirmed(client):
+    raw = kug_file(609)
+    sheet = parse_kug(raw, "test.xlsx")["sheets"][0]
+    assert sheet["weeks"][0]["hours"] == 612
+    assert sheet["errors"][0]["week_key"] == "C:D"
+    assert "итогом семестра" in sheet["errors"][0]["message"]
+    doc = client.post(
+        "/api/imports?kind=kug", files={"file": ("test.xlsx", raw)}
+    ).json()["id"]
+    before = client.get("/api/state").json()
+    response = client.post(
+        f"/api/imports/{doc}/kug",
+        json={
+            "version": before["version"],
+            "item": {
+                "acknowledged": True,
+                "sheet_key": "0",
+                "week_key": "C:D",
+                "week": before["state"]["requirements"]["n1"]["week"],
+                "group_ids": ["g1"],
+            },
+        },
+    )
+    assert response.status_code == 422
+    assert client.get("/api/state").json() == before
+    # Existing previews must receive the same protection after an upgrade.
+    from app.db import ImportDocument, SessionLocal
+
+    with SessionLocal() as db:
+        document = db.get(ImportDocument, doc)
+        preview = {**document.preview}
+        preview["sheets"] = [{**preview["sheets"][0], "errors": []}]
+        document.preview = preview
+        db.commit()
+    legacy = client.post(
+        f"/api/imports/{doc}/kug",
+        json={
+            "version": before["version"],
+            "item": {
+                "acknowledged": True,
+                "sheet_key": "0",
+                "week_key": "C:D",
+                "week": before["state"]["requirements"]["n1"]["week"],
+                "group_ids": ["g1"],
+            },
+        },
+    )
+    assert legacy.status_code == 422 and "168" in legacy.text
+    assert client.get("/api/state").json() == before

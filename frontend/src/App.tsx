@@ -3010,7 +3010,12 @@ function KugImport({
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   const sheet = p.sheets.find((s: Item) => s.key === sheetKey),
-    rows = sheet?.rows.filter((r: Item) => r.hours[weekKey] > 0) ?? [];
+    rows = sheet?.rows.filter((r: Item) => r.hours[weekKey] > 0) ?? [],
+    sourceWeek = sheet?.weeks.find((w: Item) => w.key === weekKey),
+    sourceHours = rows.reduce((n: number, r: Item) => n + r.hours[weekKey], 0),
+    targetHours = state.settings.target_exempt_weeks.includes(targetWeek)
+      ? null
+      : state.settings.target_week_hours;
   const setRow = (key: string, field: string, value: any) =>
     setMapping((m) => ({ ...m, [key]: { ...m[key], [field]: value } }));
   return (
@@ -3046,7 +3051,7 @@ function KugImport({
             >
               {sheet?.weeks.map((w: Item) => (
                 <option key={w.key} value={w.key}>
-                  {w.label}
+                  {w.label}{w.hours != null ? ` · ${w.hours} ч.` : ""}
                 </option>
               ))}
             </select>
@@ -3063,8 +3068,7 @@ function KugImport({
           </Field>
           <Field label="Часов по исходным строкам">
             <div className="readonly">
-              {rows.reduce((n: number, r: Item) => n + r.hours[weekKey], 0)}{" "}
-              академических часов
+              {sourceHours} академических часов
             </div>
           </Field>
         </div>
@@ -3084,6 +3088,16 @@ function KugImport({
         {sheet?.warnings.map((w: string, i: number) => (
           <Notice key={i}>{w}</Notice>
         ))}
+        {sourceWeek?.warnings?.map((w: string, i: number) => (
+          <Notice key={`week-warning-${i}`}>{w}</Notice>
+        ))}
+        {!!targetHours && sourceHours > 0 && sourceHours !== targetHours && (
+          <Notice error>
+            В исходном столбце {sourceHours} ч., норматив выбранной недели{" "}
+            {targetHours} ч. Сверьте исходный КУГ. Приложение не добавляет и не
+            удаляет часы для подгонки под норматив.
+          </Notice>
+        )}
         <Field label="Учебные группы этого КУГ">
           <Multi
             items={Object.values(state.groups)}

@@ -187,7 +187,9 @@ def parse_kug(raw, filename):
                         else raw_value
                     )
                     if raw_value is not None and (
-                        v is None or not isinstance(v, (int, float))
+                        v is None
+                        or isinstance(v, bool)
+                        or not isinstance(v, (int, float))
                     ):
                         errors.append(
                             {
@@ -196,7 +198,7 @@ def parse_kug(raw, filename):
                                 "message": f"Не прочитаны часы: {str(raw_value)[:60]}",
                             }
                         )
-                    if isinstance(v, (int, float)):
+                    if isinstance(v, (int, float)) and not isinstance(v, bool):
                         if v < 0 or int(v) != v:
                             errors.append(
                                 {
@@ -233,6 +235,37 @@ def parse_kug(raw, filename):
                 "errors": errors,
             }
         )
+        for span in spans:
+            total = sum(row["hours"].get(span["key"], 0) for row in rows)
+            span["hours"] = total
+            span["warnings"] = []
+            declared = []
+            if totals_row <= sheet.max_row:
+                for c in range(span["start_col"], span["end_col"] + 1):
+                    cell = sheet.cell(totals_row, c)
+                    value = cached[sheet.title].cell(totals_row, c).value
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        declared.append(value)
+                    elif cell.value is not None and str(cell.value).strip():
+                        span["warnings"].append(
+                            f"{cell.coordinate}: итог недели не прочитан. Проверьте исходный Excel"
+                        )
+            span["declared_hours"] = sum(declared) if declared else None
+            if declared and sum(declared) != total:
+                span["warnings"].append(
+                    f"Сумма строк {total} ч. не совпадает с итогом исходного листа {sum(declared):g} ч."
+                )
+            # Retain source values, but never present a term total as weekly load.
+            # 168 is the largest weekly limit supported by the domain, not the
+            # college's configurable ordinary-week target (36).
+            if total > 168:
+                errors.append(
+                    {
+                        "week_key": span["key"],
+                        "cell": span["key"],
+                        "message": f"В столбце недели {total} ч. Это превышает допустимые 168 ч. за неделю. Проверьте, не является ли столбец итогом семестра под ошибочным заголовком",
+                    }
+                )
     return result
 
 

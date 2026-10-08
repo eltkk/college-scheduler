@@ -429,6 +429,11 @@ def confirm_kug(
     rows = [r for r in sheet["rows"] if r["hours"].get(item["week_key"], 0)]
     if not rows:
         raise RuleError("В выбранном столбце нет часов")
+    # Also protect previews stored before the source-total checks were added.
+    if sum(r["hours"][item["week_key"]] for r in rows) > 168:
+        raise RuleError(
+            "В столбце больше 168 часов за неделю. Проверьте исходный КУГ: итог семестра нельзя импортировать как неделю"
+        )
     expected = {r["key"] for r in rows}
     if set(selected) != expected:
         raise RuleError(
