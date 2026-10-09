@@ -10,7 +10,7 @@ from app.word_load import W, parse_word_load
 from test_imports import kug_file
 
 
-def word_file():
+def word_file(theory_text=None):
     root = ET.Element(W + "document")
     body = ET.SubElement(root, W + "body")
 
@@ -26,7 +26,7 @@ def word_file():
         [
             "",
             "Анатомия",
-            "14\n1-9ЛД126 Иванова А.Б.\n1-9ЛД226 Петрова В.Г.",
+            theory_text or "14\n1-9ЛД126 Иванова А.Б.\n1-9ЛД226 Петрова В.Г.",
             "30+2\n1-9ЛД126 Иванова А.Б.",
             "26",
         ],
@@ -82,6 +82,23 @@ def test_group_parser_does_not_consume_surname_initial():
     groups, teachers, *_ = suggestions("1-9ЛД226 Кадиева А.Б.\n1-9ЛД326кКадиева А.Б.")
     assert groups == ["1-9ЛД226", "1-9ЛД326к"]
     assert teachers == ["Кадиева А.Б."]
+
+
+def test_word_warns_about_unrecognized_group_without_guessing_its_name():
+    raw = "30\n2-9ЛД525к – 2-9Л6525к Нажаева С.М."
+    entry = parse_word_load(word_file(theory_text=raw), "load.docx")["tables"][0]["entries"][0]
+    assert entry["raw"] == raw
+    assert entry["groups"] == ["2-9ЛД525к"]
+    assert entry["assignments"][0]["groups"] == ["2-9ЛД525к"]
+    assert any("Не распознаны обозначения групп: 2-9Л6525к" in w for w in entry["warnings"])
+
+
+def test_valid_joint_cohort_codes_do_not_raise_unrecognized_group_warning():
+    raw = "30\n2-9ЛД525к – 2-9ЛД625к Нажаева С.М."
+    entry = parse_word_load(word_file(theory_text=raw), "load.docx")["tables"][0]["entries"][0]
+    assert entry["groups"] == ["2-9ЛД525к", "2-9ЛД625к"]
+    assert entry["assignments"][0]["joint"]
+    assert not any("Не распознаны обозначения групп" in w for w in entry["warnings"])
 
 
 @pytest.mark.parametrize("raw", [b"bad", b"PK corrupt"])

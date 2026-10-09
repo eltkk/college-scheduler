@@ -13,6 +13,12 @@ GROUP = re.compile(
     re.I,
 )
 TEACHER = re.compile(r"[А-ЯЁ][а-яё-]{2,}\s*[А-ЯЁ]\s*\.+\s*[А-ЯЁ]\s*\.*")
+# A cohort-looking code can contain a typo outside the supported program names.
+# Keep it visible for review instead of silently dropping it or guessing its name.
+GROUP_CANDIDATE = re.compile(
+    r"(?<![\w])\d{1,2}\s*-\s*9\s*[А-ЯЁ]{1,4}\s*\d{3,4}(?:\s*(?-i:[бкс])(?!(?-i:[а-яё])))?",
+    re.I,
+)
 
 
 def grid_number(element, default):
@@ -236,6 +242,19 @@ def parse_word_load(raw: bytes, filename: str):
                         or column_kind(labels.get(cell["column"], ""))
                     )
                     warnings = []
+                    unresolved_groups = list(
+                        dict.fromkeys(
+                            re.sub(r"\s+", "", candidate.group())
+                            for candidate in GROUP_CANDIDATE.finditer(value)
+                            if not GROUP.fullmatch(candidate.group())
+                        )
+                    )
+                    if unresolved_groups:
+                        warnings.append(
+                            "Не распознаны обозначения групп: "
+                            + "; ".join(unresolved_groups)
+                            + ". Проверьте исходный текст и добавьте группы в назначения вручную."
+                        )
                     if hours is None:
                         warnings.append(
                             "Часы не являются одним числом. Разделите виды нагрузки и укажите подтверждённые часы."
