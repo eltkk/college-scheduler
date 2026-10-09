@@ -2787,11 +2787,17 @@ function CalendarSettings({
       </div>
       <aside className="panel settings-help">
         <ShieldCheck size={27} />
-        <h3>Сначала подтвердите правила</h3>
+        <h3>
+          {state.settings.confirmed
+            ? "Правила подтверждены"
+            : "Сначала подтвердите правила"}
+        </h3>
         <p>
-          Начальные звонки являются примером. Автоматическое составление
-          доступно после проверки календаря.
+          {state.settings.confirmed
+            ? "Согласованные правила сохранены. Для автоматического составления подтвердите учебную нагрузку выбранной недели."
+            : "Начальные звонки являются примером. Автоматическое составление доступно после проверки календаря."}
         </p>
+        {dirty && <p>Изменения формы начнут действовать после сохранения.</p>}
         <p>
           Предельные часы и доступность отдельных преподавателей, групп и
           помещений задаются в справочниках.
@@ -2815,10 +2821,22 @@ function Imports({
 }: Common & { api: Api; week: string }) {
   const [kind, setKind] = useState("kug"),
     [documents, setDocuments] = useState<Item[]>([]),
+    [documentsLoading, setDocumentsLoading] = useState(true),
+    [documentsError, setDocumentsError] = useState(""),
     [document, setDocument] = useState<Item | null>(null),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
-  const reload = () => api("/imports").then(setDocuments);
+  const reload = async () => {
+    setDocumentsLoading(true);
+    setDocumentsError("");
+    try {
+      setDocuments(await api("/imports"));
+    } catch (x) {
+      setDocumentsError((x as Error).message);
+    } finally {
+      setDocumentsLoading(false);
+    }
+  };
   useEffect(() => {
     reload();
   }, []);
@@ -2911,7 +2929,16 @@ function Imports({
           <History size={18} />
           <h3>Загруженные документы</h3>
         </div>
-        {!documents.length ? (
+        {documentsLoading ? (
+          <div className="empty compact" role="status">
+            Загружаем список документов…
+          </div>
+        ) : documentsError ? (
+          <>
+            <Notice error>{documentsError}</Notice>
+            <Button onClick={reload}>Повторить загрузку</Button>
+          </>
+        ) : !documents.length ? (
           <div className="empty compact">Документы ещё не загружены.</div>
         ) : (
           <table className="data-table">
@@ -2940,8 +2967,13 @@ function Imports({
                   <td>
                     <Button
                       onClick={async () => {
-                        setDocument(await api("/imports/" + d.id));
-                        editor(true);
+                        try {
+                          setError("");
+                          setDocument(await api("/imports/" + d.id));
+                          editor(true);
+                        } catch (x) {
+                          setError((x as Error).message);
+                        }
                       }}
                     >
                       Проверить
