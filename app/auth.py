@@ -4,7 +4,7 @@ from datetime import timedelta, timezone
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
 from fastapi import Depends, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import func, select
 from .config import settings
 from .db import LoginSession, LoginAttempt, SessionLocal, User, now
 
@@ -49,7 +49,14 @@ def login(db, username, password, client_ip):
         and attempt.failures >= 10
     ):
         raise HTTPException(429, "Слишком много попыток. Повторите вход через 15 минут")
-    user = db.scalar(select(User).where(User.login == username.strip()))
+    entered_login = username.strip()
+    user = db.scalar(select(User).where(User.login == entered_login))
+    if user is None:
+        matches = db.scalars(
+            select(User).where(func.lower(User.login) == entered_login.lower()).limit(2)
+        ).all()
+        if len(matches) == 1:
+            user = matches[0]
     valid = False
     try:
         valid = hasher.verify(user.password_hash if user else DUMMY_HASH, password)

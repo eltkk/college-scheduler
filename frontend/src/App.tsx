@@ -551,6 +551,7 @@ function Login({
 }) {
   const [login, setLogin] = useState(""),
     [password, setPassword] = useState(""),
+    [showPassword, setShowPassword] = useState(false),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   return (
@@ -596,6 +597,9 @@ function Login({
           <Field label="Логин">
             <input
               autoComplete="username"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               autoFocus
               value={login}
               onChange={(e) => setLogin(e.target.value)}
@@ -604,13 +608,34 @@ function Login({
           </Field>
           <Field label="Пароль">
             <input
-              type="password"
+              type={showPassword ? "text" : "password"}
               autoComplete="current-password"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
             />
           </Field>
+          <div className="login-options">
+            <button type="button" className="login-option" aria-pressed={showPassword}
+              onClick={() => setShowPassword((value) => !value)}>
+              {showPassword ? "Скрыть пароль" : "Показать пароль"}
+            </button>
+            {password !== password.trim() && (
+              <button type="button" className="login-option"
+                onClick={() => setPassword(password.trim())}>
+                Убрать пробелы по краям
+              </button>
+            )}
+          </div>
+          {password !== password.trim() && (
+            <p className="login-input-help" role="status">
+              В начале или конце пароля есть пробелы. Если они добавились при копировании, уберите их.
+            </p>
+          )}
+          <p className="login-input-help">Логин: editor1, editor2, editor3 или editor4 латинскими буквами.</p>
           {error && <Notice error>{error}</Notice>}
           <Button className="primary full" disabled={busy}>
             {busy ? "Входим…" : "Войти"}

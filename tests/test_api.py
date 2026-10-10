@@ -47,6 +47,17 @@ def test_cookie_csrf_logout_and_auth_gate(client):
     assert client.get("/api/state").status_code == 401
 
 
+def test_login_accepts_capitalized_identifier_but_preserves_password(client):
+    with TestClient(app) as editor:
+        response = editor.post('/api/auth/login', json={
+            'login': ' Editor1 ', 'password': 'test-only-password'})
+        assert response.status_code == 200
+        assert editor.get('/api/auth/me').json()['login'] == 'editor1'
+        for incorrect in ('TEST-only-password', ' test-only-password '):
+            assert editor.post('/api/auth/login', json={
+                'login': 'EDITOR1', 'password': incorrect}).status_code == 401
+
+
 def test_failed_logins_rate_limited(client):
     for i in range(10):
         assert (
